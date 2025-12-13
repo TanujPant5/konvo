@@ -4,6 +4,28 @@
 // ============================================================
 'use strict';
 
+// ============================================================
+// VIEWPORT HEIGHT FIX (MOBILE + INSTALLED PWA)
+// ============================================================
+// On iOS/Android (especially in standalone/PWA mode), the on-screen keyboard can shrink the
+// *visual* viewport without reliable support for CSS viewport units. This keeps the chat input
+// from being pushed below the visible area (requiring scroll to type).
+(function setupAppHeight() {
+  const apply = () => {
+    const h = window.visualViewport?.height || window.innerHeight;
+    document.documentElement.style.setProperty('--app-height', `${h}px`);
+    // Inline style beats Tailwind height utilities on <body>
+    if (document.body) document.body.style.height = `${h}px`;
+  };
+
+  apply();
+
+  // Update on rotation/resize and keyboard open/close
+  window.addEventListener('resize', apply);
+  window.visualViewport?.addEventListener('resize', apply);
+  window.visualViewport?.addEventListener('scroll', apply);
+})();
+
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app-check.js";
 import {

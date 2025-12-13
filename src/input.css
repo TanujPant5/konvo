@@ -1079,6 +1079,8 @@ body.selection-mode .message-bubble {
 #chatForm,
 #confessionForm {
   padding: 12px;
+  /* Prevent the bottom input bar from colliding with iOS home indicator / safe area in PWA */
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
   background-color: rgba(10, 10, 10, 0.95);
   border-top: 1px solid var(--border-color);
 }
