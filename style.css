@@ -1204,68 +1204,52 @@ body.selection-mode .message-bubble {
 }
 
 /* =========================================
-   STRICT MOBILE LAYOUT FIX (Add to bottom)
+   STRICT MOBILE LAYOUT FIX
    ========================================= */
 
-/* 1. LOCK THE PAGE (Crucial) */
 html, body {
-  height: 100dvh !important;       /* Strict height, no growing */
-  max-height: 100dvh !important;
+  height: 100dvh !important;
   width: 100vw !important;
-  overflow: hidden !important;     /* Disable body scroll */
+  overflow: hidden !important;
   margin: 0 !important;
-  position: fixed;                 /* Prevents iOS bounce/scroll */
+  position: fixed;
   inset: 0;
 }
 
-/* 2. MAIN CONTAINER SETUP */
-/* Ensure the flex container fills exactly the screen height */
 body {
   display: flex !important;
   flex-direction: column !important;
 }
 
-/* 3. HEADER & FOOTER LOCK */
-/* Stop them from shrinking or scrolling away */
-header, 
-#chatForm, 
-#confessionForm {
-  flex-shrink: 0 !important;       /* Never shrink */
-  position: relative !important;   /* Use Flexbox placement, not absolute */
+header, #chatForm, #confessionForm {
+  flex-shrink: 0 !important;
+  position: relative !important;
   z-index: 50;
 }
 
-/* 4. MAIN CONTENT AREA */
 main {
-  flex: 1 1 auto !important;       /* Grow to fill space */
+  flex: 1 1 auto !important;
   display: flex !important;
   flex-direction: column !important;
-  overflow: hidden !important;     /* Container itself shouldn't scroll */
+  overflow: hidden !important;
   height: auto !important;
-  min-height: 0 !important;        /* CRITICAL: Allows flex child to scroll */
-  padding: 0 !important;           /* Remove old padding fixes */
+  min-height: 0 !important;
+  padding: 0 !important;
 }
 
-/* 5. SCROLLABLE FEED */
 #feedContainer {
-  flex: 1 1 auto !important;       /* Take all remaining space */
-  overflow-y: auto !important;     /* Enable internal scroll */
+  flex: 1 1 auto !important;
+  overflow-y: auto !important;
   height: auto !important;
-  min-height: 0 !important;        /* CRITICAL: Allows scrolling inside flex */
-  
-  /* Reset padding to look good */
-  padding-top: 1rem !important;    
+  min-height: 0 !important;
+  padding-top: 1rem !important;
   padding-bottom: 1rem !important;
-  
-  /* Smooth scrolling */
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
 }
 
-/* 6. Clean up the scroll button */
 #scrollToBottomBtn {
   position: absolute;
-  bottom: 80px; /* Position relative to the main container, above input */
+  bottom: 80px;
   right: 20px;
   left: auto;
   transform: none;
