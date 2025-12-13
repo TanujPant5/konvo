@@ -39,92 +39,93 @@ service cloud.firestore {
     }
 
     // ============================
-// 2. VALIDATION FUNCTIONS
-// ============================
+    // 2. VALIDATION FUNCTIONS
+    // ============================
 
-// Validate message text content
-function isValidText() {
-  let text = request.resource.data.text;
-  return text is string
-         && text.size() > 0
-         && text.size() <= 2000
-         && !text.matches('.*[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F].*');
-}
+    // Validate message text content
+    function isValidText() {
+      let text = request.resource.data.text;
+      return text is string
+             && text.size() > 0
+             && text.size() <= 2000
+             && !text.matches('.*[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F].*');
+    }
 
-// Force server timestamp
-function isServerTimestamp() {
-  return request.resource.data.timestamp == request.time;
-}
+    // Force server timestamp
+    function isServerTimestamp() {
+      return request.resource.data.timestamp == request.time;
+    }
 
-// Whitelist valid message collections
-function isValidCollection(col) {
-  return col in ['chat', 'confessions'];
-}
+    // Whitelist valid message collections
+    function isValidCollection(col) {
+      return col in ['chat', 'confessions'];
+    }
 
-// Rate limiting: 1 message per 2 seconds
-function canSendMessage() {
-  let userDoc = /databases/$(database)/documents/users/$(request.auth.uid);
-  return isActiveUser() && (
-    !exists(userDoc) ||
-    !('lastMessageAt' in get(userDoc).data) ||
-    get(userDoc).data.lastMessageAt + duration.value(2, 's') < request.time
-  );
-}
+    // Rate limiting: 1 message per 2 seconds
+    function canSendMessage() {
+      let userDoc = /databases/$(database)/documents/users/$(request.auth.uid);
+      return isActiveUser() && (
+        !exists(userDoc) ||
+        !('lastMessageAt' in get(userDoc).data) ||
+        get(userDoc).data.lastMessageAt + duration.value(2, 's') < request.time
+      );
+    }
 
-// Validate username format (matches app.js isValidUsername)
-function isValidUsername(username) {
-  return username is string
-         && username.size() >= 1
-         && username.size() <= 30
-         && username.matches('^[a-zA-Z0-9_\\- ]+$')
-         && username.lower() != 'anonymous'
-         && username.lower() != 'admin'
-         && username.lower() != 'moderator'
-         && username.lower() != 'system'
-         && username.lower() != 'konvo'
-         && username.lower() != 'mod'
-         && !username.lower().matches('.*anonymous.*')
-         && !username.lower().matches('.*admin.*')
-         && !username.lower().matches('.*moderator.*')
-         && !username.lower().matches('.*konvo.*')
-         && !username.lower().matches('.*mod.*');
-}
+    // Validate username format (matches app.js isValidUsername)
+    function isValidUsername(username) {
+      return username is string
+             && username.size() >= 1
+             && username.size() <= 30
+             && username.matches('^[a-zA-Z0-9_\\- ]+$')
+             // Reserved usernames (synced with app.js)
+             && username.lower() != 'anonymous'
+             && username.lower() != 'admin'
+             && username.lower() != 'moderator'
+             && username.lower() != 'system'
+             && username.lower() != 'konvo'
+             && username.lower() != 'mod'
+             && !username.lower().matches('.*anonymous.*')
+             && !username.lower().matches('.*admin.*')
+             && !username.lower().matches('.*moderator.*')
+             && !username.lower().matches('.*konvo.*')
+             && !username.lower().matches('.*mod.*');
+    }
 
-// Validate profile photo URL (matches app.js isValidProfilePhotoURL)
-function isValidProfilePhotoURL(url) {
-  return url is string
-         && url.size() <= 500
-         && (
-           url.matches('^https://placehold\\.co/.*')
-           || url.matches('^https://ui-avatars\\.com/.*')
-           || url.matches('^https://api\\.dicebear\\.com/.*')
-         );
-}
+    // Validate profile photo URL (matches app.js isValidProfilePhotoURL)
+    function isValidProfilePhotoURL(url) {
+      return url is string
+             && url.size() <= 500
+             && (
+               url.matches('^https://placehold\\.co/.*')
+               || url.matches('^https://ui-avatars\\.com/.*')
+               || url.matches('^https://api\\.dicebear\\.com/.*')
+             );
+    }
 
-// Validate user profile creation (by user)
-function isValidUserProfileCreate() {
-  let data = request.resource.data;
-  let allowedFields = ['username', 'profilePhotoURL', 'lastMessageAt'];
-  
-  return data.keys().hasOnly(allowedFields)
-         && (!('username' in data) || isValidUsername(data.username))
-         && (!('profilePhotoURL' in data) || isValidProfilePhotoURL(data.profilePhotoURL))
-         && (!('lastMessageAt' in data) || data.lastMessageAt == request.time);
-}
+    // Validate user profile creation (by user)
+    function isValidUserProfileCreate() {
+      let data = request.resource.data;
+      let allowedFields = ['username', 'profilePhotoURL', 'lastMessageAt'];
+      
+      return data.keys().hasOnly(allowedFields)
+             && (!('username' in data) || isValidUsername(data.username))
+             && (!('profilePhotoURL' in data) || isValidProfilePhotoURL(data.profilePhotoURL))
+             && (!('lastMessageAt' in data) || data.lastMessageAt == request.time);
+    }
 
-// FIXED: Validate user profile update (by user)
-function isValidUserProfileUpdate() {
-  let data = request.resource.data;
-  let changedFields = data.diff(resource.data).affectedKeys();
-  let allowedFields = ['username', 'profilePhotoURL', 'lastMessageAt'];
-  
-  return changedFields.hasOnly(allowedFields)
-         && (!('username' in data) || isValidUsername(data.username))
-         && (!('profilePhotoURL' in data) || isValidProfilePhotoURL(data.profilePhotoURL))
-         // FIXED: Only validate timestamp if it's being changed
-         && (!('lastMessageAt' in changedFields) || data.lastMessageAt == request.time)
-         && !('banned' in changedFields);
-}
+    // Validate user profile update (by user)
+    function isValidUserProfileUpdate() {
+      let data = request.resource.data;
+      let changedFields = data.diff(resource.data).affectedKeys();
+      let allowedFields = ['username', 'profilePhotoURL', 'lastMessageAt'];
+      
+      return changedFields.hasOnly(allowedFields)
+             && (!('username' in data) || isValidUsername(data.username))
+             && (!('profilePhotoURL' in data) || isValidProfilePhotoURL(data.profilePhotoURL))
+             && (!('lastMessageAt' in data) || data.lastMessageAt == request.time)
+             // CRITICAL: Users cannot modify banned field
+             && !('banned' in changedFields);
+    }
 
     // Validate admin creating user doc (for banning users without profile)
     function isValidAdminUserCreate() {

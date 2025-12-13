@@ -708,7 +708,7 @@ body.selection-mode .message-bubble {
 
 #scrollToBottomBtn {
   position: absolute;
-  bottom: 100px; /* Increased to clear the fixed input bar */
+  bottom: 80px;
   left: 50%;
   transform: translateX(-50%);
   background-color: var(--surface);
@@ -996,7 +996,7 @@ body.selection-mode .message-bubble {
   transform: scale(0.95) translateY(10px);
   opacity: 0;
   transition: all 0.3s var(--ease-out-expo);
-  /* max-width: 90vw; */
+  max-width: 90vw;
   max-height: 90vh;
   overflow: auto;
 }
@@ -1201,56 +1201,4 @@ body.selection-mode .message-bubble {
   :root {
     color-scheme: dark;
   }
-}
-
-/* =========================================
-   STRICT MOBILE LAYOUT FIX
-   ========================================= */
-
-html, body {
-  height: 100dvh !important;
-  width: 100vw !important;
-  overflow: hidden !important;
-  margin: 0 !important;
-  position: fixed;
-  inset: 0;
-}
-
-body {
-  display: flex !important;
-  flex-direction: column !important;
-}
-
-header, #chatForm, #confessionForm {
-  flex-shrink: 0 !important;
-  position: relative !important;
-  z-index: 50;
-}
-
-main {
-  flex: 1 1 auto !important;
-  display: flex !important;
-  flex-direction: column !important;
-  overflow: hidden !important;
-  height: auto !important;
-  min-height: 0 !important;
-  padding: 0 !important;
-}
-
-#feedContainer {
-  flex: 1 1 auto !important;
-  overflow-y: auto !important;
-  height: auto !important;
-  min-height: 0 !important;
-  padding-top: 1rem !important;
-  padding-bottom: 1rem !important;
-  -webkit-overflow-scrolling: touch;
-}
-
-#scrollToBottomBtn {
-  position: absolute;
-  bottom: 80px;
-  right: 20px;
-  left: auto;
-  transform: none;
 }
