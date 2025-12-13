@@ -154,15 +154,38 @@ function getUserColor(userId) {
 }
 
 function createActionContainer() {
+  // Check if container already exists
+  const existing = document.getElementById("confirmModalActionContainer");
+  if (existing) return existing;
+  
+  // Find the confirm modal's button container
+  const confirmModalContent = document.querySelector("#confirmModal .modal-content");
+  if (!confirmModalContent) return null;
+  
+  const buttonRow = confirmModalContent.querySelector(".flex.gap-3.mt-4");
+  if (!buttonRow) return null;
+  
+  // Check for existing yes button
   const existingYesBtn = document.getElementById("confirmModalYesButton");
-  if (existingYesBtn && existingYesBtn.parentNode) {
+  if (existingYesBtn) {
+    // Create container and wrap the yes button
     const container = document.createElement("div");
     container.id = "confirmModalActionContainer";
     container.className = "flex gap-2 flex-1";
-    existingYesBtn.parentNode.replaceChild(container, existingYesBtn);
+    
+    if (existingYesBtn.parentNode) {
+      existingYesBtn.parentNode.insertBefore(container, existingYesBtn);
+      container.appendChild(existingYesBtn);
+    }
     return container;
   }
-  return null;
+  
+  // If no yes button exists, just create the container
+  const container = document.createElement("div");
+  container.id = "confirmModalActionContainer";
+  container.className = "flex gap-2 flex-1";
+  buttonRow.appendChild(container);
+  return container;
 }
 
 function registerServiceWorker() {

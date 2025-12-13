@@ -687,3 +687,84 @@ body.selection-mode .message-bubble {
   overflow: hidden;
   background-color: var(--surface);
 }
+
+
+/* ========== HEADER FIXES ========== */
+
+/* Sticky Header with backdrop blur */
+header#mainHeader {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background-color: rgba(10, 10, 10, 0.95);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Prevent header content overflow on mobile */
+header#mainHeader h1 {
+  min-width: 0;
+}
+
+header#mainHeader nav {
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Responsive navigation items */
+.nav-item {
+  cursor: pointer;
+  padding: 6px 8px;
+  border-bottom: 2px solid transparent;
+  transition: all 0.3s ease;
+  color: var(--text-muted);
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+  .nav-item {
+    padding: 8px 16px;
+    font-size: 0.875rem;
+    letter-spacing: 0.5px;
+  }
+}
+
+.nav-item.active,
+.nav-item:hover {
+  color: var(--text-main);
+  border-bottom-color: var(--text-main);
+}
+
+/* Header button hover state fix */
+header button:hover {
+  background-color: var(--highlight);
+  color: var(--text-main);
+  transform: none;
+}
+
+/* Safe area insets for notched devices */
+@supports (padding-top: env(safe-area-inset-top)) {
+  header#mainHeader {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+  }
+  
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* Fix for iOS rubber-banding showing background */
+body::before {
+  content: '';
+  position: fixed;
+  top: -100px;
+  left: 0;
+  right: 0;
+  height: 100px;
+  background-color: var(--bg-color);
+  z-index: 39;
+}
