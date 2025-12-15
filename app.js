@@ -319,13 +319,13 @@ function createKebabIcon() {
 // FIREBASE CONFIGURATION
 // ============================================================
 const firebaseConfig = {
-  apiKey: "AIzaSyDOiYfkCf3Y1Fq7625HimKsm3wYwjBWoxc",
-  authDomain: "konvo-d357d.firebaseapp.com",
-  projectId: "konvo-d357d",
-  storageBucket: "konvo-d357d.firebasestorage.app",
-  messagingSenderId: "924631278394",
-  appId: "1:924631278394:web:84b8642b5366d869926603"
-};
+    apiKey: "AIzaSyB8T4naak4ZlMGLKGFLpWEKXHqRSw4O9Xc",
+    authDomain: "konvomain-fa7ed.firebaseapp.com",
+    projectId: "konvomain-fa7ed",
+    storageBucket: "konvomain-fa7ed.firebasestorage.app",
+    messagingSenderId: "81540120286",
+    appId: "1:81540120286:web:9a01799acba41c35c48c4f"
+  };
 
 // App start time for determining new messages
 const appStartTime = Date.now();
