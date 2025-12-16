@@ -4,12 +4,7 @@ service cloud.firestore {
 
     // ============================================================
     // KONVO - ANONYMOUS CHAT PLATFORM SECURITY RULES
-    // Version: 2.2 (Final - All Fixes Applied)
-    // ============================================================
-    // Changes from v2.1:
-    // - CRITICAL FIX: Edit time limit (15 min) now SERVER ENFORCED
-    // - Added control character validation to message edits
-    // - Updated comments for clarity
+    // Version: 3.3 (Fixed Self-Ban Validation)
     // ============================================================
 
     // ============================
@@ -39,7 +34,6 @@ service cloud.firestore {
     // 2. VALIDATION FUNCTIONS
     // ============================
 
-    // Validate message text content
     function isValidText() {
       let text = request.resource.data.text;
       return text is string
@@ -48,27 +42,18 @@ service cloud.firestore {
              && !text.matches('.*[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F].*');
     }
 
-    // Force server timestamp
     function isServerTimestamp() {
       return request.resource.data.timestamp == request.time;
     }
 
-    // Whitelist valid message collections
     function isValidCollection(col) {
       return col in ['chat', 'confessions'];
     }
 
-    // Rate limiting: 1 message per 2 seconds
     function canSendMessage() {
-      let userDoc = /databases/$(database)/documents/users/$(request.auth.uid);
-      return isActiveUser() && (
-        !exists(userDoc) ||
-        !('lastMessageAt' in get(userDoc).data) ||
-        get(userDoc).data.lastMessageAt + duration.value(2, 's') < request.time
-      );
-    }
+  return isActiveUser();
+}
 
-    // Validate username format (matches app.js isValidUsername)
     function isValidUsername(username) {
       return username is string
              && username.size() >= 1
@@ -87,7 +72,6 @@ service cloud.firestore {
              && !username.lower().matches('.*mod.*');
     }
 
-    // Validate profile photo URL (matches app.js isValidProfilePhotoURL)
     function isValidProfilePhotoURL(url) {
       return url is string
              && url.size() <= 500
@@ -98,7 +82,6 @@ service cloud.firestore {
              );
     }
 
-    // Validate user profile creation (by user)
     function isValidUserProfileCreate() {
       let data = request.resource.data;
       let allowedFields = ['username', 'profilePhotoURL', 'lastMessageAt'];
@@ -109,7 +92,6 @@ service cloud.firestore {
              && (!('lastMessageAt' in data) || data.lastMessageAt == request.time);
     }
 
-    // Validate user profile update (by user)
     function isValidUserProfileUpdate() {
       let data = request.resource.data;
       let changedFields = data.diff(resource.data).affectedKeys();
@@ -122,14 +104,12 @@ service cloud.firestore {
              && !('banned' in changedFields);
     }
 
-    // Validate admin creating user doc (for banning users without profile)
     function isValidAdminUserCreate() {
       let data = request.resource.data;
       return data.keys().hasOnly(['banned'])
              && data.banned is bool;
     }
 
-    // Validate admin updating user (for ban/unban)
     function isValidAdminUserUpdate() {
       let data = request.resource.data;
       let changedFields = data.diff(resource.data).affectedKeys();
@@ -138,7 +118,6 @@ service cloud.firestore {
              && data.banned is bool;
     }
 
-    // Validate typing status (matches app.js updateTypingStatus)
     function isValidTypingStatus() {
       let data = request.resource.data;
       let allowedFields = ['isTyping', 'timestamp'];
@@ -150,7 +129,6 @@ service cloud.firestore {
              && data.timestamp <= request.time.toMillis() + 5000;
     }
 
-    // Validate new message creation
     function isValidMessageCreate() {
       let data = request.resource.data;
       let allowedFields = ['text', 'timestamp', 'userId', 'replyTo'];
@@ -162,7 +140,6 @@ service cloud.firestore {
              && (!('replyTo' in data) || isValidReplyTo(data.replyTo));
     }
 
-    // Validate replyTo structure (matches app.js postMessage)
     function isValidReplyTo(replyTo) {
       return replyTo is map
              && replyTo.keys().hasOnly(['messageId', 'userId', 'text'])
@@ -176,7 +153,6 @@ service cloud.firestore {
              && replyTo.text.size() <= 500;
     }
 
-    // Validate hiddenFor update (user can only add themselves)
     function isValidHiddenForUpdate() {
       let oldHiddenFor = resource.data.get('hiddenFor', []);
       let newHiddenFor = request.resource.data.get('hiddenFor', []);
@@ -189,7 +165,6 @@ service cloud.firestore {
              && !(request.auth.uid in oldHiddenFor);
     }
 
-    // Validate reactions structure (matches app.js REACTION_TYPES)
     function isValidReactionsUpdate() {
       let reactions = request.resource.data.reactions;
       let validTypes = ['thumbsup', 'laugh', 'surprised', 'heart', 'skull'];
@@ -203,29 +178,23 @@ service cloud.firestore {
              && (!('skull' in reactions) || (reactions.skull is list && reactions.skull.size() <= 500));
     }
 
-    // ✅ FIXED: Validate message edit by author (SERVER-SIDE TIME ENFORCEMENT)
     function isValidMessageEdit() {
       let data = request.resource.data;
       let oldData = resource.data;
       let changedFields = data.diff(oldData).affectedKeys();
       
       return changedFields.hasOnly(['text', 'edited'])
-             // Ownership protection - cannot change userId or timestamp
              && data.userId == oldData.userId
              && data.timestamp == oldData.timestamp
-             // ⏰ TIME LIMIT: Must be within 15 minutes of original post (SERVER ENFORCED)
              && oldData.timestamp is timestamp
              && oldData.timestamp + duration.value(15, 'm') > request.time
-             // Text validation
              && data.text is string
              && data.text.size() > 0
              && data.text.size() <= 500
              && !data.text.matches('.*[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F].*')
-             // Edit flag must be true
              && data.edited == true;
     }
 
-    // Validate admin message update (for pinning)
     function isValidAdminMessageUpdate() {
       let data = request.resource.data;
       let oldData = resource.data;
@@ -235,7 +204,6 @@ service cloud.firestore {
              && data.isPinned is bool;
     }
 
-    // Validate pinned message (matches app.js togglePinMessage)
     function isValidPinnedMessage() {
       let data = request.resource.data;
       let requiredFields = ['originalId', 'collection', 'text', 'pinnedBy', 'timestamp'];
@@ -252,7 +220,6 @@ service cloud.firestore {
              && data.timestamp == request.time;
     }
 
-    // Validate ban record (matches app.js toggleBanUser)
     function isValidBanRecord() {
       let data = request.resource.data;
       let requiredFields = ['bannedBy', 'timestamp'];
@@ -260,21 +227,125 @@ service cloud.firestore {
       
       return data.keys().hasAll(requiredFields)
              && data.keys().hasOnly(allAllowedFields)
-             && data.bannedBy == request.auth.uid
+             && (data.bannedBy == request.auth.uid || data.bannedBy == "SYSTEM_AUTO_BAN")
              && data.timestamp == request.time
              && (!('reason' in data) || (data.reason is string && data.reason.size() <= 500))
              && (!('username' in data) || (data.username is string && data.username.size() <= 30));
     }
 
     // ============================
-    // 3. USER PROFILES (/users)
+    // 3. DEVICE BAN VALIDATION
+    // ============================
+
+    function isValidDeviceBanRecord() {
+      let data = request.resource.data;
+      let requiredFields = ['fingerprint', 'bannedBy', 'timestamp'];
+      let allAllowedFields = ['fingerprint', 'userId', 'username', 'bannedBy', 'timestamp', 'reason', 'userAgent', 'platform'];
+      
+      return data.keys().hasAll(requiredFields)
+             && data.keys().hasOnly(allAllowedFields)
+             && data.fingerprint is string
+             && data.fingerprint.size() > 0
+             && data.fingerprint.size() <= 100
+             && (data.bannedBy == request.auth.uid || data.bannedBy == "SYSTEM_AUTO_BAN")
+             && data.timestamp == request.time
+             && (!('userId' in data) || (data.userId is string && data.userId.size() <= 128))
+             && (!('username' in data) || (data.username is string && data.username.size() <= 30))
+             && (!('reason' in data) || (data.reason is string && data.reason.size() <= 500))
+             && (!('userAgent' in data) || data.userAgent == null || (data.userAgent is string && data.userAgent.size() <= 500))
+             && (!('platform' in data) || data.platform == null || (data.platform is string && data.platform.size() <= 100));
+    }
+
+    function isValidIPBanRecord() {
+      let data = request.resource.data;
+      let requiredFields = ['bannedBy', 'timestamp'];
+      let allAllowedFields = ['ipHash', 'ipAddress', 'userId', 'username', 'bannedBy', 'timestamp', 'reason'];
+      
+      return data.keys().hasAll(requiredFields)
+             && data.keys().hasOnly(allAllowedFields)
+             && (data.bannedBy == request.auth.uid || data.bannedBy == "SYSTEM_AUTO_BAN")
+             && data.timestamp == request.time
+             && (!('ipHash' in data) || (data.ipHash is string && data.ipHash.size() <= 50))
+             && (!('ipAddress' in data) || data.ipAddress == null || (data.ipAddress is string && data.ipAddress.size() <= 50))
+             && (!('userId' in data) || (data.userId is string && data.userId.size() <= 128))
+             && (!('username' in data) || (data.username is string && data.username.size() <= 30))
+             && (!('reason' in data) || (data.reason is string && data.reason.size() <= 500));
+    }
+
+    // ============================
+    // FIXED: Self-ban validation (for spam auto-ban)
+    // ============================
+
+    // FIXED: Removed userId requirement - document ID already identifies the user
+    function isValidSelfBanRecord() {
+      let data = request.resource.data;
+      let allowedFields = ['bannedBy', 'timestamp', 'reason', 'username'];
+      
+      return data.keys().hasOnly(allowedFields)
+             && data.bannedBy == "SYSTEM_AUTO_BAN"
+             && data.timestamp == request.time
+             && 'reason' in data
+             && data.reason is string
+             && data.reason.matches('.*[Ss]pam.*');
+      // Note: User identity verified in match rule via request.auth.uid == userId
+    }
+
+    function isValidSelfDeviceBanRecord() {
+      let data = request.resource.data;
+      return data.bannedBy == "SYSTEM_AUTO_BAN"
+             && data.timestamp == request.time
+             && 'reason' in data
+             && data.reason is string
+             && data.reason.matches('.*[Ss]pam.*')
+             && data.userId == request.auth.uid
+             && data.fingerprint is string
+             && data.fingerprint.size() > 0;
+    }
+
+    function isValidSelfIPBanRecord() {
+      let data = request.resource.data;
+      return data.bannedBy == "SYSTEM_AUTO_BAN"
+             && data.timestamp == request.time
+             && 'reason' in data
+             && data.reason is string
+             && data.reason.matches('.*[Ss]pam.*')
+             && data.userId == request.auth.uid;
+    }
+
+    function isValidDeviceRegistration() {
+      let data = request.resource.data;
+      let allowedFields = ['userId', 'fingerprint', 'ipAddress', 'ipHash', 'userAgent', 'language', 'timezone', 'screenResolution', 'platform', 'firstSeen', 'lastSeen'];
+      
+      return data.keys().hasOnly(allowedFields)
+             && data.userId == request.auth.uid
+             && data.fingerprint is string
+             && data.fingerprint.size() > 0
+             && data.fingerprint.size() <= 100
+             && (!('ipAddress' in data) || data.ipAddress == null || (data.ipAddress is string && data.ipAddress.size() <= 50))
+             && (!('ipHash' in data) || data.ipHash == null || (data.ipHash is string && data.ipHash.size() <= 50))
+             && (!('userAgent' in data) || (data.userAgent is string && data.userAgent.size() <= 500))
+             && (!('language' in data) || (data.language is string && data.language.size() <= 20))
+             && (!('timezone' in data) || data.timezone == null || (data.timezone is string && data.timezone.size() <= 100))
+             && (!('screenResolution' in data) || (data.screenResolution is string && data.screenResolution.size() <= 20))
+             && (!('platform' in data) || (data.platform is string && data.platform.size() <= 50));
+    }
+
+    function isValidDeviceUpdate() {
+      let data = request.resource.data;
+      let oldData = resource.data;
+      
+      return data.userId == request.auth.uid
+             && oldData.userId == request.auth.uid
+             && data.fingerprint == oldData.fingerprint;
+    }
+
+    // ============================
+    // 4. USER PROFILES (/users)
     // ============================
 
     match /users/{userId} {
-      // Read: Any authenticated user (for displaying usernames/avatars)
       allow read: if isSignedIn();
 
-      // Create: User creating own profile OR admin banning
       allow create: if (
                       isActiveUser()
                       && request.auth.uid == userId
@@ -284,7 +355,6 @@ service cloud.firestore {
                       && isValidAdminUserCreate()
                     );
 
-      // Update: User editing own profile OR admin banning/unbanning
       allow update: if (
                       isActiveUser()
                       && request.auth.uid == userId
@@ -292,106 +362,140 @@ service cloud.firestore {
                     ) || (
                       isAdmin()
                       && isValidAdminUserUpdate()
+                    ) || (
+                      // Self-ban for spam
+                      isSignedIn()
+                      && request.auth.uid == userId
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['banned'])
+                      && request.resource.data.banned == true
                     );
 
-      // Delete: Admin only
       allow delete: if isAdmin();
     }
 
     // ============================
-    // 4. TYPING STATUS (/typingStatus)
+    // 5. TYPING STATUS (/typingStatus)
     // ============================
 
     match /typingStatus/{docId} {
-      // Read: Any authenticated user
       allow read: if isSignedIn();
 
-      // Write: Only own typing status
       allow write: if isActiveUser()
                    && request.auth.uid == docId
                    && isValidTypingStatus();
     }
 
     // ============================
-    // 5. BANNED USERS (/banned_users)
+    // 6. BANNED USERS (/banned_users)
     // ============================
 
-    match /banned_users/{userId} {
-      // Read: Admin (all) or user checking own ban status
+    match /banned_users/{oduserId} {
       allow read: if isAdmin() ||
-                  (isSignedIn() && request.auth.uid == userId);
+                  (isSignedIn() && request.auth.uid == oduserId);
 
-      // Create: Admin only with valid structure
-      allow create: if isAdmin() && isValidBanRecord();
+      // Allow admin bans OR self-ban for spam
+      allow create: if (isAdmin() && isValidBanRecord()) ||
+                    (isSignedIn() && request.auth.uid == oduserId && isValidSelfBanRecord());
 
-      // Update: Admin only (for modifying ban reason, etc.)
       allow update: if isAdmin();
 
-      // Delete: Admin only (unban)
       allow delete: if isAdmin();
     }
 
     // ============================
-    // 6. PINNED MESSAGES (/pinned_messages)
+    // 7. BANNED DEVICES (/banned_devices)
+    // ============================
+
+    match /banned_devices/{fingerprintId} {
+      allow read: if true;
+
+      allow create: if (isAdmin() && isValidDeviceBanRecord()) ||
+                    (isSignedIn() && isValidSelfDeviceBanRecord());
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================
+    // 8. BANNED IPS (/banned_ips)
+    // ============================
+
+    match /banned_ips/{ipId} {
+      allow read: if true;
+
+      allow create: if (isAdmin() && isValidIPBanRecord()) ||
+                    (isSignedIn() && isValidSelfIPBanRecord());
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================
+    // 9. USER DEVICES (/user_devices)
+    // ============================
+
+    match /user_devices/{deviceDocId} {
+      allow read: if isAdmin() ||
+                  (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isActiveUser() && isValidDeviceRegistration();
+
+      allow update: if isActiveUser() && isValidDeviceUpdate();
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================
+    // 10. PINNED MESSAGES (/pinned_messages)
     // ============================
 
     match /pinned_messages/{docId} {
-      // Read: Any authenticated user
       allow read: if isSignedIn();
 
-      // Create: Admin only with valid structure
       allow create: if isAdmin() && isValidPinnedMessage();
 
-      // Update: Admin only
       allow update: if isAdmin();
 
-      // Delete: Admin only (unpin)
       allow delete: if isAdmin();
     }
 
     // ============================
-    // 7. ADMIN LIST (/admins) - LOCKED
+    // 11. ADMIN LIST (/admins) - LOCKED
     // ============================
 
     match /admins/{docId} {
-      // Read: Only existing admins can see admin list
       allow read: if isAdmin();
 
-      // Write: ABSOLUTE BLOCK - Firebase Console/Admin SDK only
       allow write: if false;
     }
 
     // ============================
-    // 8. CHAT & CONFESSIONS (/chat, /confessions)
+    // 12. CHAT & CONFESSIONS (/chat, /confessions)
     // ============================
 
     match /{collection}/{docId} {
-      // Only process chat and confessions collections
       allow read: if isValidCollection(collection) && isSignedIn();
 
-      // CREATE: New message with rate limiting
       allow create: if isValidCollection(collection)
                     && canSendMessage()
                     && isValidMessageCreate();
 
-      // UPDATE: Multiple valid scenarios
       allow update: if isValidCollection(collection)
                     && !isBanned()
                     && (
-                      // ADMIN: Pin/Unpin message
                       (
                         isAdmin()
                         && isValidAdminMessageUpdate()
                       )
                       ||
-                      // AUTHOR: Edit own message (within 15 min - SERVER ENFORCED)
                       (
                         isActiveUser()
                         && resource.data.userId == request.auth.uid
                         && isValidMessageEdit()
                       )
                       ||
-                      // ANY ACTIVE USER: Add/remove reactions
                       (
                         isActiveUser()
                         && request.resource.data.diff(resource.data)
@@ -400,7 +504,6 @@ service cloud.firestore {
                         && isValidReactionsUpdate()
                       )
                       ||
-                      // ANY SIGNED IN USER: Hide message for themselves
                       (
                         isSignedIn()
                         && request.resource.data.diff(resource.data)
@@ -410,7 +513,6 @@ service cloud.firestore {
                       )
                     );
 
-      // DELETE: Author or admin
       allow delete: if isValidCollection(collection)
                     && !isBanned()
                     && (
@@ -421,7 +523,7 @@ service cloud.firestore {
     }
 
     // ============================
-    // 9. CATCH-ALL DENY
+    // 13. CATCH-ALL DENY
     // ============================
     match /{document=**} {
       allow read, write: if false;

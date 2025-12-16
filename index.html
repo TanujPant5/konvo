@@ -19,10 +19,8 @@
     <title>Konvo // Anonymous Chat</title>
     
     <!-- Favicon & Icons -->
-    <!-- Use favicon.png for best cross-browser tab compatibility (generated from icon.jpg) -->
     <link rel="icon" type="image/png" href="/favicon.png?v=8" />
     <link rel="shortcut icon" type="image/png" href="/favicon.png?v=8" />
-    <!-- Keep icon.jpg as a fallback/source asset -->
     <link rel="icon" type="image/jpeg" href="/icon.jpg?v=8" />
     <link rel="apple-touch-icon" href="/icon.jpg" />
     
@@ -46,6 +44,13 @@
   </head>
   
   <body class="flex flex-col bg-[#0a0a0a] h-dvh">
+    <!-- Ban Check Overlay (shows while checking device status) -->
+    <div id="banCheckOverlay" class="ban-check-overlay">
+      <div class="text-center">
+        <div class="ban-check-text">VERIFYING ACCESS...</div>
+      </div>
+    </div>
+
     <!-- Header -->
     <header
       class="flex justify-between items-center px-3 py-3 border-b border-[#333333] bg-[#0a0a0a] gap-2 z-10 h-14"
@@ -54,16 +59,16 @@
         KONVO
       </h1>
       
-      <div class="flex items-center gap-2 overflow-hidden flex-1 justify-end">
+      <div class="flex items-center gap-2 overflow-visible flex-1 justify-end">
         <nav class="flex text-[10px] sm:text-base font-medium gap-1 sm:gap-4 shrink">
           <div 
             id="navConfessions" 
-            class="nav-item px-2 py-1 truncate"
+            class="nav-item px-2 py-1"
             role="button"
             tabindex="0"
             aria-label="View Confessions"
           >
-            CONFESSIONS
+            <span class="block truncate">CONFESSIONS</span>
           </div>
           <div 
             id="navChat" 
@@ -72,7 +77,7 @@
             tabindex="0"
             aria-label="View Chat"
           >
-            CHAT
+            <span class="block truncate">CHAT</span>
           </div>
         </nav>
 
@@ -246,80 +251,80 @@
       </div>
 
       <!-- Confession Form -->
-<form 
-  id="confessionForm" 
-  class="hidden gap-3 border-t border-[#333] relative"
-  aria-label="Post a confession"
->
-  <label for="confessionInput" class="sr-only">Type your confession</label>
+      <form 
+        id="confessionForm" 
+        class="hidden gap-3 border-t border-[#333] relative"
+        aria-label="Post a confession"
+      >
+        <label for="confessionInput" class="sr-only">Type your confession</label>
 
-  <div class="relative flex-1">
-    <textarea
-      id="confessionInput"
-      rows="1"
-      class="w-full resize-none focus:outline-none text-sm pr-16"
-      placeholder="Type your confession..."
-      required
-      maxlength="500"
-      autocomplete="off"
-      spellcheck="true"
-    ></textarea>
+        <div class="relative flex-1">
+          <textarea
+            id="confessionInput"
+            rows="1"
+            class="w-full resize-none focus:outline-none text-sm pr-16"
+            placeholder="Type your confession..."
+            required
+            maxlength="500"
+            autocomplete="off"
+            spellcheck="true"
+          ></textarea>
 
-    <!-- Character Counter -->
-    <span 
-      id="confessionCharCount" 
-      class="char-counter"
-      aria-live="polite"
-      aria-label="Character count"
-    >0/500</span>
-  </div>
-  
-  <button
-    id="confessionButton"
-    type="submit"
-    class="px-5 py-2 rounded-lg font-bold text-sm bg-white text-black hover:bg-[#cccccc] transition focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-white"
-  >
-    POST
-  </button>
-</form>
+          <!-- Character Counter -->
+          <span 
+            id="confessionCharCount" 
+            class="char-counter"
+            aria-live="polite"
+            aria-label="Character count"
+          >0/500</span>
+        </div>
+        
+        <button
+          id="confessionButton"
+          type="submit"
+          class="px-5 py-2 rounded-lg font-bold text-sm bg-white text-black hover:bg-[#cccccc] transition focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-white"
+        >
+          POST
+        </button>
+      </form>
 
       <!-- Chat Form -->
       <form 
-      id="chatForm" 
-      class="flex gap-3 border-t border-[#333] relative"
-      aria-label="Send a message"
->
-      <label for="chatInput" class="sr-only">Type a message</label>
+        id="chatForm" 
+        class="flex gap-3 border-t border-[#333] relative"
+        aria-label="Send a message"
+      >
+        <label for="chatInput" class="sr-only">Type a message</label>
 
-      <div class="relative flex-1">
-        <textarea
-        id="chatInput"
-        rows="1"
-        class="w-full resize-none focus:outline-none text-sm pr-16"
-        placeholder="Type a message..."
-        required
-        maxlength="500"
-        autocomplete="off"
-        spellcheck="true"
-        ></textarea>
+        <div class="relative flex-1">
+          <textarea
+            id="chatInput"
+            rows="1"
+            class="w-full resize-none focus:outline-none text-sm pr-16"
+            placeholder="Type a message..."
+            required
+            maxlength="500"
+            autocomplete="off"
+            spellcheck="true"
+          ></textarea>
 
-        <!-- Character Counter -->
-        <span 
-         id="chatCharCount" 
-         class="char-counter"
-         aria-live="polite"
-         aria-label="Character count"
-        >0/500</span>
-      </div>
-  
-  <button
-    id="chatButton"
-    type="submit"
-    class="px-5 py-2 rounded-lg font-bold text-sm bg-white text-black hover:bg-[#cccccc] transition focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-white"
-  >
-    SEND
-  </button>
-</form>
+          <!-- Character Counter -->
+          <span 
+            id="chatCharCount" 
+            class="char-counter"
+            aria-live="polite"
+            aria-label="Character count"
+          >0/500</span>
+        </div>
+        
+        <button
+          id="chatButton"
+          type="submit"
+          class="px-5 py-2 rounded-lg font-bold text-sm bg-white text-black hover:bg-[#cccccc] transition focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-white"
+        >
+          SEND
+        </button>
+      </form>
     </main>
 
     <!-- Profile Modal -->
@@ -459,6 +464,9 @@
         <li id="menuSelect" role="menuitem" tabindex="-1">Select</li>
       </ul>
     </div>
+
+    <!-- FingerprintJS CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
 
     <!-- App Script -->
     <script type="module" src="app.js"></script>

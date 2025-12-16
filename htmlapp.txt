@@ -805,14 +805,6 @@ const state = {
   isInitialized: false,
   isBanned: false,
   isDeviceBanned: false,
-
-  // NEW: Unread counts for each tab
-  unreadChatCount: 0,
-  unreadConfessionCount: 0,
-  
-  // NEW: Track last seen message timestamps
-  lastSeenChatTimestamp: Date.now(),
-  lastSeenConfessionTimestamp: Date.now(),
   
   // PERFORMANCE: Track render state
   isFirstRender: true,
@@ -1659,17 +1651,7 @@ async function handleAuthStateChange(user) {
     hideBanCheckOverlay();
 
     initScrollObserver();
-    
-    // NEW: Initialize last seen timestamps
-    state.lastSeenChatTimestamp = Date.now();
-    state.lastSeenConfessionTimestamp = Date.now();
-    
-    // NEW: Setup background listeners for both collections
-    setupBackgroundListeners();
-    
-    // Show initial page (this will now just handle UI, not listeners)
-    showPageUI(state.currentPage);
-    
+    showPage(state.currentPage);
     state.isInitialized = true;
     
   } else {
@@ -1978,87 +1960,6 @@ function updateScrollButton() {
       newMsgCount.classList.add("hidden");
     }
   }
-}
-
-// ============================================================
-// NAV BADGE NOTIFICATION SYSTEM
-// ============================================================
-
-/**
- * Update the navigation badge for unread messages
- * @param {string} tab - 'chat' or 'confessions'
- * @param {number} count - Number of unread messages
- */
-function updateNavBadge(tab, count) {
-  const navElement = tab === 'chat' ? navChat : navConfessions;
-  if (!navElement) return;
-  
-  // Remove existing badge
-  const existingBadge = navElement.querySelector('.nav-badge');
-  if (existingBadge) {
-    existingBadge.remove();
-  }
-  
-  // Add new badge if count > 0
-  if (count > 0) {
-    const badge = document.createElement('span');
-    badge.className = 'nav-badge';
-    badge.textContent = count > 99 ? '99+' : String(count);
-    badge.setAttribute('aria-label', `${count} unread messages`);
-    navElement.appendChild(badge);
-    
-    // Add pulse animation for attention
-    badge.classList.add('pulse');
-    setTimeout(() => badge.classList.remove('pulse'), 1000);
-  }
-}
-
-/**
- * Increment unread count for a specific tab
- * @param {string} tab - 'chat' or 'confessions'
- * @param {number} increment - Number to add (default 1)
- */
-function incrementUnreadCount(tab, increment = 1) {
-  if (tab === 'chat') {
-    state.unreadChatCount += increment;
-    updateNavBadge('chat', state.unreadChatCount);
-  } else if (tab === 'confessions') {
-    state.unreadConfessionCount += increment;
-    updateNavBadge('confessions', state.unreadConfessionCount);
-  }
-}
-
-/**
- * Clear unread count for a specific tab
- * @param {string} tab - 'chat' or 'confessions'
- */
-function clearUnreadCount(tab) {
-  if (tab === 'chat') {
-    state.unreadChatCount = 0;
-    state.lastSeenChatTimestamp = Date.now();
-    updateNavBadge('chat', 0);
-  } else if (tab === 'confessions') {
-    state.unreadConfessionCount = 0;
-    state.lastSeenConfessionTimestamp = Date.now();
-    updateNavBadge('confessions', 0);
-  }
-}
-
-/**
- * Check if a message is new (for badge counting)
- * @param {Object} data - Message data
- * @param {string} tab - 'chat' or 'confessions'
- * @returns {boolean}
- */
-function isNewMessageForBadge(data, tab) {
-  if (!data.timestamp) return false;
-  
-  const msgTime = data.timestamp.toMillis ? data.timestamp.toMillis() : data.timestamp;
-  const lastSeen = tab === 'chat' 
-    ? state.lastSeenChatTimestamp 
-    : state.lastSeenConfessionTimestamp;
-  
-  return msgTime > lastSeen;
 }
 
 function scrollToBottom() {
@@ -2762,9 +2663,6 @@ function showPage(page) {
   messageCache.order = [];
   state.isFirstRender = true;
   
-  // NEW: Clear unread count for the page we're switching TO
-  clearUnreadCount(page);
-  
   if (state.isSelectionMode) exitSelectionMode();
   cancelReplyMode();
   
@@ -2862,34 +2760,12 @@ function listenForConfessions(isRerender = false) {
     query(state.confessionsCollection, orderBy("timestamp", "asc")),
     (snapshot) => {
       state.lastConfessionDocs = snapshot.docs;
-      
-      // NEW: Count new messages for badge (only if not on confessions page)
-      if (!isFirstSnapshot && state.currentPage !== 'confessions') {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const data = change.doc.data();
-            // Don't count own messages or hidden messages
-            if (data.userId !== state.currentUserId && 
-                !data.hiddenFor?.includes(state.currentUserId)) {
-              const msgTime = data.timestamp ? data.timestamp.toMillis() : 0;
-              if (msgTime > state.lastSeenConfessionTimestamp) {
-                incrementUnreadCount('confessions');
-              }
-            }
-          }
-        });
-      }
-      
-      // Only render if we're on the confessions page
-      if (state.currentPage === 'confessions') {
-        renderFeedOptimized(state.lastConfessionDocs, "confessions", snapshot, false, isFirstSnapshot);
-      }
-      
+      renderFeedOptimized(state.lastConfessionDocs, "confessions", snapshot, false, isFirstSnapshot);
       isFirstSnapshot = false;
     },
     (error) => {
       console.error('Confessions error:', error);
-      if (feedContainer && state.currentPage === 'confessions') {
+      if (feedContainer) {
         feedContainer.innerHTML = '';
         const errorDiv = document.createElement("div");
         errorDiv.className = "text-center p-4 text-red-500";
@@ -2926,34 +2802,12 @@ function listenForChat(isRerender = false) {
     query(state.chatCollection, orderBy("timestamp", "asc")),
     (snapshot) => {
       state.lastChatDocs = snapshot.docs;
-      
-      // NEW: Count new messages for badge (only if not on chat page)
-      if (!isFirstSnapshot && state.currentPage !== 'chat') {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const data = change.doc.data();
-            // Don't count own messages or hidden messages
-            if (data.userId !== state.currentUserId && 
-                !data.hiddenFor?.includes(state.currentUserId)) {
-              const msgTime = data.timestamp ? data.timestamp.toMillis() : 0;
-              if (msgTime > state.lastSeenChatTimestamp) {
-                incrementUnreadCount('chat');
-              }
-            }
-          }
-        });
-      }
-      
-      // Only render if we're on the chat page
-      if (state.currentPage === 'chat') {
-        renderFeedOptimized(state.lastChatDocs, "chat", snapshot, false, isFirstSnapshot);
-      }
-      
+      renderFeedOptimized(state.lastChatDocs, "chat", snapshot, false, isFirstSnapshot);
       isFirstSnapshot = false;
     },
     (error) => {
       console.error('Chat error:', error);
-      if (feedContainer && state.currentPage === 'chat') {
+      if (feedContainer) {
         feedContainer.innerHTML = '';
         const errorDiv = document.createElement("div");
         errorDiv.className = "text-center p-4 text-red-500";
@@ -3037,185 +2891,6 @@ const updateTypingStatus = debounce(async (isTyping) => {
     // Silent fail for typing status
   }
 }, 300);
-
-// ============================================================
-// BACKGROUND LISTENERS FOR UNREAD BADGES
-// ============================================================
-
-/**
- * Setup listeners for both chat and confessions to track unread counts
- * This runs in the background regardless of which page you're on
- */
-function setupBackgroundListeners() {
-  // Listen for chat messages in background
-  const chatQuery = query(state.chatCollection, orderBy("timestamp", "asc"));
-  
-  let chatFirstSnapshot = true;
-  const chatUnsub = onSnapshot(chatQuery, (snapshot) => {
-    state.lastChatDocs = snapshot.docs;
-    
-    if (!chatFirstSnapshot && state.currentPage !== 'chat') {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          const data = change.doc.data();
-          if (data.userId !== state.currentUserId && 
-              !data.hiddenFor?.includes(state.currentUserId)) {
-            const msgTime = data.timestamp ? data.timestamp.toMillis() : 0;
-            if (msgTime > state.lastSeenChatTimestamp) {
-              incrementUnreadCount('chat');
-            }
-          }
-        }
-      });
-    }
-    
-    if (state.currentPage === 'chat') {
-      renderFeedOptimized(state.lastChatDocs, "chat", snapshot, false, chatFirstSnapshot);
-    }
-    
-    chatFirstSnapshot = false;
-  }, (error) => {
-    console.error('Background chat listener error:', error);
-  });
-  
-  // Listen for confessions in background
-  const confessionsQuery = query(state.confessionsCollection, orderBy("timestamp", "asc"));
-  
-  let confessionsFirstSnapshot = true;
-  const confessionsUnsub = onSnapshot(confessionsQuery, (snapshot) => {
-    state.lastConfessionDocs = snapshot.docs;
-    
-    if (!confessionsFirstSnapshot && state.currentPage !== 'confessions') {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          const data = change.doc.data();
-          if (data.userId !== state.currentUserId && 
-              !data.hiddenFor?.includes(state.currentUserId)) {
-            const msgTime = data.timestamp ? data.timestamp.toMillis() : 0;
-            if (msgTime > state.lastSeenConfessionTimestamp) {
-              incrementUnreadCount('confessions');
-            }
-          }
-        }
-      });
-    }
-    
-    if (state.currentPage === 'confessions') {
-      renderFeedOptimized(state.lastConfessionDocs, "confessions", snapshot, false, confessionsFirstSnapshot);
-    }
-    
-    confessionsFirstSnapshot = false;
-  }, (error) => {
-    console.error('Background confessions listener error:', error);
-  });
-  
-  // Store unsubscribers
-  unsubscribers.chat = chatUnsub;
-  unsubscribers.confessions = confessionsUnsub;
-}
-
-// ============================================================
-// PAGE UI SWITCHING
-// ============================================================
-
-/**
- * Switch page UI without recreating listeners
- * @param {string} page - 'chat' or 'confessions'
- */
-function showPageUI(page) {
-  if (page !== 'chat' && page !== 'confessions') {
-    page = 'chat';
-  }
-  
-  state.currentPage = page;
-  
-  // Clear message cache when switching pages
-  messageCache.messages.clear();
-  messageCache.order = [];
-  state.isFirstRender = true;
-  
-  // Clear unread count for the page we're switching TO
-  clearUnreadCount(page);
-  
-  if (state.isSelectionMode) exitSelectionMode();
-  cancelReplyMode();
-  
-  document.querySelectorAll(".reaction-picker").forEach(p => p.remove());
-  
-  if (typingIndicator) typingIndicator.innerHTML = "&nbsp;";
-  state.unreadMessages = 0;
-  
-  if (newMsgCount) newMsgCount.classList.add("hidden");
-  if (scrollToBottomBtn) {
-    scrollToBottomBtn.classList.add("hidden");
-    scrollToBottomBtn.style.display = "";
-  }
-
-  listenForPinnedMessages();
-
-  if (page === "confessions") {
-    navConfessions?.classList.add("active");
-    navConfessions?.setAttribute("aria-pressed", "true");
-    navChat?.classList.remove("active");
-    navChat?.setAttribute("aria-pressed", "false");
-    
-    if (confessionForm) {
-      confessionForm.classList.add("flex");
-      confessionForm.classList.remove("hidden");
-    }
-    if (chatForm) {
-      chatForm.classList.add("hidden");
-      chatForm.classList.remove("flex");
-    }
-    if (typingIndicator) typingIndicator.classList.add("hidden");
-    
-    // Render confessions from cached docs
-    if (state.lastConfessionDocs.length > 0) {
-      renderFeedOptimized(state.lastConfessionDocs, "confessions", null, true, true);
-    } else {
-      if (feedContainer) {
-        feedContainer.innerHTML = '';
-        const loadingDiv = document.createElement('div');
-        loadingDiv.id = 'loading';
-        loadingDiv.className = 'text-center p-4 text-[#888888] text-sm';
-        loadingDiv.textContent = 'LOADING CONFESSIONS...';
-        feedContainer.appendChild(loadingDiv);
-      }
-    }
-    
-  } else {
-    navChat?.classList.add("active");
-    navChat?.setAttribute("aria-pressed", "true");
-    navConfessions?.classList.remove("active");
-    navConfessions?.setAttribute("aria-pressed", "false");
-    
-    if (chatForm) {
-      chatForm.classList.add("flex");
-      chatForm.classList.remove("hidden");
-    }
-    if (confessionForm) {
-      confessionForm.classList.add("hidden");
-      confessionForm.classList.remove("flex");
-    }
-    if (typingIndicator) typingIndicator.classList.remove("hidden");
-    
-    // Render chat from cached docs
-    if (state.lastChatDocs.length > 0) {
-      renderFeedOptimized(state.lastChatDocs, "chat", null, true, true);
-    } else {
-      if (feedContainer) {
-        feedContainer.innerHTML = '';
-        const loadingDiv = document.createElement('div');
-        loadingDiv.id = 'loading';
-        loadingDiv.className = 'text-center p-4 text-[#888888] text-sm';
-        loadingDiv.textContent = 'LOADING CHAT...';
-        feedContainer.appendChild(loadingDiv);
-      }
-    }
-    
-    listenForTyping();
-  }
-}
 
 // ============================================================
 // PERFORMANCE: OPTIMIZED RENDER FEED
@@ -4027,20 +3702,20 @@ chatForm?.addEventListener("submit", (e) => {
   postMessage(state.chatCollection, chatInput);
 });
 
-navConfessions?.addEventListener("click", () => showPageUI("confessions"));
-navChat?.addEventListener("click", () => showPageUI("chat"));
+navConfessions?.addEventListener("click", () => showPage("confessions"));
+navChat?.addEventListener("click", () => showPage("chat"));
 
 navConfessions?.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
-    showPageUI("confessions");
+    showPage("confessions");
   }
 });
 
 navChat?.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
-    showPageUI("chat");
+    showPage("chat");
   }
 });
 
