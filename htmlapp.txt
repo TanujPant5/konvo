@@ -1,6 +1,6 @@
 // ============================================================
 // KONVO - ANONYMOUS CHAT APPLICATION
-// Version: 3.2 (Performance Optimized)
+// Version: 3.1 (Device Fingerprinting + IP Ban System - FIXED)
 // ============================================================
 'use strict';
 
@@ -51,86 +51,12 @@ import {
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 // ============================================================
-// PERFORMANCE: MESSAGE CACHE & VIRTUAL DOM
-// ============================================================
-
-/**
- * Message cache for incremental updates
- */
-const messageCache = {
-  // Map of messageId -> { element, data, timestamp }
-  messages: new Map(),
-  
-  // Track rendered message order
-  order: [],
-  
-  // Last known scroll position
-  lastScrollTop: 0,
-  
-  // Pending updates batch
-  pendingUpdates: [],
-  
-  // Update timeout for batching
-  updateTimeout: null,
-  
-  // Flag to prevent redundant renders
-  isRendering: false,
-  
-  // Document fragment for batch DOM operations
-  fragment: null,
-};
-
-/**
- * Object pool for reusing DOM elements
- */
-const elementPool = {
-  bubbles: [],
-  wrappers: [],
-  maxPoolSize: 50,
-  
-  getBubble() {
-    if (this.bubbles.length > 0) {
-      const el = this.bubbles.pop();
-      el.className = 'message-bubble rounded-lg max-w-xs sm:max-w-md md:max-w-lg';
-      el.innerHTML = '';
-      return el;
-    }
-    return document.createElement('div');
-  },
-  
-  getWrapper() {
-    if (this.wrappers.length > 0) {
-      const el = this.wrappers.pop();
-      el.className = 'message-wrapper';
-      el.innerHTML = '';
-      return el;
-    }
-    return document.createElement('div');
-  },
-  
-  recycle(element) {
-    if (!element) return;
-    
-    if (element.classList.contains('message-bubble') && this.bubbles.length < this.maxPoolSize) {
-      element.innerHTML = '';
-      element.removeAttribute('style');
-      this.bubbles.push(element);
-    } else if (element.classList.contains('message-wrapper') && this.wrappers.length < this.maxPoolSize) {
-      element.innerHTML = '';
-      this.wrappers.push(element);
-    }
-  },
-  
-  clear() {
-    this.bubbles = [];
-    this.wrappers = [];
-  }
-};
-
-// ============================================================
 // DEVICE IDENTIFICATION SYSTEM
 // ============================================================
 
+/**
+ * Device identification state
+ */
 const deviceState = {
   fingerprint: null,
   ipAddress: null,
@@ -138,8 +64,13 @@ const deviceState = {
   isBannedDevice: false,
 };
 
+/**
+ * Generate device fingerprint using FingerprintJS
+ * @returns {Promise<string>} - Device fingerprint ID
+ */
 async function generateDeviceFingerprint() {
   try {
+    // Check if FingerprintJS is loaded
     if (typeof FingerprintJS === 'undefined') {
       console.warn('FingerprintJS not loaded, using fallback');
       return generateFallbackFingerprint();
@@ -148,6 +79,7 @@ async function generateDeviceFingerprint() {
     const fp = await FingerprintJS.load();
     const result = await fp.get();
     
+    // The visitorId is a stable identifier
     deviceState.fingerprint = result.visitorId;
     console.log('Device fingerprint generated');
     
@@ -158,6 +90,10 @@ async function generateDeviceFingerprint() {
   }
 }
 
+/**
+ * Fallback fingerprint generation if FingerprintJS fails
+ * @returns {string} - Fallback fingerprint
+ */
 function generateFallbackFingerprint() {
   const components = [
     navigator.userAgent,
@@ -170,6 +106,7 @@ function generateFallbackFingerprint() {
     navigator.platform,
   ];
   
+  // Create a hash from components
   let hash = 0;
   const str = components.join('|||');
   for (let i = 0; i < str.length; i++) {
@@ -184,6 +121,10 @@ function generateFallbackFingerprint() {
   return fallbackId;
 }
 
+/**
+ * Get user's IP address using multiple fallback services
+ * @returns {Promise<string|null>} - IP address or null
+ */
 async function getUserIPAddress() {
   const ipServices = [
     'https://api.ipify.org?format=json',
@@ -206,6 +147,7 @@ async function getUserIPAddress() {
       if (response.ok) {
         const text = await response.text();
         
+        // Try to parse as JSON first
         try {
           const json = JSON.parse(text);
           const ip = json.ip || json.query || json.ipAddress;
@@ -215,6 +157,7 @@ async function getUserIPAddress() {
             return ip;
           }
         } catch {
+          // Not JSON, use raw text
           const ip = text.trim();
           if (isValidIP(ip)) {
             deviceState.ipAddress = ip;
@@ -232,10 +175,18 @@ async function getUserIPAddress() {
   return null;
 }
 
+/**
+ * Validate IP address format
+ * @param {string} ip - IP address to validate
+ * @returns {boolean} - Whether IP is valid
+ */
 function isValidIP(ip) {
   if (!ip || typeof ip !== 'string') return false;
   
+  // IPv4 pattern
   const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+  
+  // IPv6 pattern (simplified)
   const ipv6Pattern = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^([0-9a-fA-F]{1,4}:)*:([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4}$|^::$/;
   
   if (ipv4Pattern.test(ip)) {
@@ -246,6 +197,11 @@ function isValidIP(ip) {
   return ipv6Pattern.test(ip);
 }
 
+/**
+ * Hash an IP address for storage (privacy consideration)
+ * @param {string} ip - IP address
+ * @returns {string} - Hashed IP
+ */
 function hashIP(ip) {
   if (!ip) return '';
   
@@ -259,8 +215,13 @@ function hashIP(ip) {
   return 'ip_' + Math.abs(hash).toString(36);
 }
 
+/**
+ * Initialize device identification
+ * @returns {Promise<Object>} - Device info object
+ */
 async function initializeDeviceIdentification() {
   try {
+    // Generate fingerprint and get IP in parallel
     const [fingerprint, ipAddress] = await Promise.all([
       generateDeviceFingerprint(),
       getUserIPAddress()
@@ -283,6 +244,7 @@ async function initializeDeviceIdentification() {
   } catch (error) {
     console.error('Device identification error:', error);
     
+    // Return minimal info on error
     return {
       fingerprint: generateFallbackFingerprint(),
       ipAddress: null,
@@ -296,12 +258,19 @@ async function initializeDeviceIdentification() {
   }
 }
 
+/**
+ * Check if device is banned
+ * @param {Object} db - Firestore database instance
+ * @param {Object} deviceInfo - Device information object
+ * @returns {Promise<Object>} - Ban check result
+ */
 async function checkDeviceBan(db, deviceInfo) {
   if (!db || !deviceInfo) {
     return { isBanned: false, reason: null };
   }
   
   try {
+    // Check fingerprint ban
     if (deviceInfo.fingerprint) {
       const fingerprintBanRef = doc(db, "banned_devices", deviceInfo.fingerprint);
       const fingerprintBanSnap = await getDoc(fingerprintBanRef);
@@ -317,6 +286,7 @@ async function checkDeviceBan(db, deviceInfo) {
       }
     }
     
+    // Check IP ban
     if (deviceInfo.ipAddress) {
       const ipHash = hashIP(deviceInfo.ipAddress);
       const ipBanRef = doc(db, "banned_ips", ipHash);
@@ -332,6 +302,7 @@ async function checkDeviceBan(db, deviceInfo) {
         };
       }
       
+      // Also check raw IP (for backward compatibility)
       const rawIpBanRef = doc(db, "banned_ips", deviceInfo.ipAddress.replace(/\./g, '_'));
       const rawIpBanSnap = await getDoc(rawIpBanRef);
       
@@ -348,10 +319,17 @@ async function checkDeviceBan(db, deviceInfo) {
     
   } catch (error) {
     console.error('Ban check error:', error);
+    // On error, allow access but log the issue
     return { isBanned: false, reason: null, error: error.message };
   }
 }
 
+/**
+ * Register device in database
+ * @param {Object} db - Firestore database instance
+ * @param {string} userId - User ID
+ * @param {Object} deviceInfo - Device information
+ */
 async function registerDevice(db, userId, deviceInfo) {
   if (!db || !userId || !deviceInfo) return;
   
@@ -372,11 +350,14 @@ async function registerDevice(db, userId, deviceInfo) {
       lastSeen: serverTimestamp(),
     }, { merge: true });
     
+    // Also update last seen on existing record
     await updateDoc(deviceRef, {
       lastSeen: serverTimestamp(),
-      ipAddress: deviceInfo.ipAddress,
+      ipAddress: deviceInfo.ipAddress, // Update IP in case it changed
       ipHash: deviceInfo.ipHash,
-    }).catch(() => {});
+    }).catch(() => {
+      // Ignore if document doesn't exist for update
+    });
     
     console.log('Device registered');
     
@@ -385,108 +366,53 @@ async function registerDevice(db, userId, deviceInfo) {
   }
 }
 
+/**
+ * Hide the ban check overlay
+ */
 function hideBanCheckOverlay() {
   const overlay = document.getElementById('banCheckOverlay');
   if (overlay) {
     overlay.classList.add('hidden');
+    // Use setTimeout to allow transition
     setTimeout(() => {
       overlay.style.display = 'none';
     }, 300);
   }
 }
 
-async function checkFullUnbanStatus() {
-  if (!state.db || !state.deviceInfo) return;
-  
-  try {
-    let stillBanned = false;
-    
-    if (state.currentUserId) {
-      const userBanRef = doc(state.db, "banned_users", state.currentUserId);
-      const userBanSnap = await getDoc(userBanRef);
-      if (userBanSnap.exists()) stillBanned = true;
-    }
-    
-    if (!stillBanned && state.deviceInfo.fingerprint) {
-      const fpBanRef = doc(state.db, "banned_devices", state.deviceInfo.fingerprint);
-      const fpBanSnap = await getDoc(fpBanRef);
-      if (fpBanSnap.exists()) stillBanned = true;
-    }
-    
-    if (!stillBanned && state.deviceInfo.ipHash) {
-      const ipBanRef = doc(state.db, "banned_ips", state.deviceInfo.ipHash);
-      const ipBanSnap = await getDoc(ipBanRef);
-      if (ipBanSnap.exists()) stillBanned = true;
-    }
-    
-    if (!stillBanned && state.deviceInfo.ipAddress) {
-      const rawIpKey = state.deviceInfo.ipAddress.replace(/\./g, '_');
-      const rawIpBanRef = doc(state.db, "banned_ips", rawIpKey);
-      const rawIpBanSnap = await getDoc(rawIpBanRef);
-      if (rawIpBanSnap.exists()) stillBanned = true;
-    }
-    
-    if (!stillBanned) {
-      state.isBanned = false;
-      state.isDeviceBanned = false;
-      showUnbannedScreen();
-    }
-    
-  } catch (error) {
-    console.error("Error checking unban status:", error);
-  }
-}
-
+/**
+ * Show device banned screen
+ * @param {string} reason - Ban reason
+ */
 function showDeviceBannedScreen(reason = 'Device banned') {
-  const appContainer = document.getElementById('app') || document.body;
-  Array.from(appContainer.children).forEach(child => {
-    if (child.id !== 'banOverlayScreen') {
-      child.style.display = 'none';
-    }
-  });
+  const overlay = document.getElementById('banCheckOverlay');
+  if (overlay) {
+    // Clear existing content and add banned message
+    overlay.innerHTML = '';
+    overlay.className = 'ban-check-overlay';
+    
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'device-banned-content';
+    
+    const h1 = document.createElement('h1');
+    h1.textContent = '🚫 ACCESS DENIED';
+    
+    const p1 = document.createElement('p');
+    p1.textContent = 'This device has been banned from Konvo.';
+    
+    const p2 = document.createElement('p');
+    p2.className = 'reason';
+    p2.textContent = 'Reason: ' + sanitizeText(reason);
+    
+    contentDiv.appendChild(h1);
+    contentDiv.appendChild(p1);
+    contentDiv.appendChild(p2);
+    overlay.appendChild(contentDiv);
+    
+    overlay.style.display = 'flex';
+    overlay.classList.remove('hidden');
+  }
   
-  const existingOverlay = document.getElementById('banOverlayScreen');
-  if (existingOverlay) existingOverlay.remove();
-  const existingCheck = document.getElementById('banCheckOverlay');
-  if (existingCheck) existingCheck.style.display = 'none';
-  
-  const overlay = document.createElement('div');
-  overlay.id = 'banOverlayScreen';
-  overlay.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background-color: #0a0a0a;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 99999;
-    gap: 0.5rem;
-    padding: 1rem;
-  `;
-  
-  const h1 = document.createElement('h1');
-  h1.style.cssText = 'font-size: 1.875rem; color: #ef4444; font-weight: bold;';
-  h1.textContent = '🚫 ACCESS DENIED';
-  
-  const p1 = document.createElement('p');
-  p1.style.cssText = 'color: #888; font-size: 0.875rem;';
-  p1.textContent = 'This device has been banned from Konvo.';
-  
-  const p2 = document.createElement('p');
-  p2.style.cssText = 'color: #666; font-size: 0.75rem;';
-  p2.textContent = 'Reason: ' + sanitizeText(reason);
-  
-  const p3 = document.createElement('p');
-  p3.style.cssText = 'color: #555; font-size: 0.75rem; margin-top: 1rem;';
-  p3.textContent = 'If you believe this is a mistake, please wait for admin review.';
-  
-  overlay.appendChild(h1);
-  overlay.appendChild(p1);
-  overlay.appendChild(p2);
-  overlay.appendChild(p3);
-  
-  document.body.appendChild(overlay);
   document.body.classList.add('device-banned');
 }
 
@@ -494,6 +420,11 @@ function showDeviceBannedScreen(reason = 'Device banned') {
 // SECURITY UTILITIES
 // ============================================================
 
+/**
+ * Sanitize text to prevent XSS attacks
+ * @param {string} text - Raw text input
+ * @returns {string} - Sanitized text
+ */
 function sanitizeText(text) {
   if (typeof text !== 'string') return '';
   return text
@@ -506,6 +437,11 @@ function sanitizeText(text) {
     .replace(/`/g, '&#x60;');
 }
 
+/**
+ * Validate username format
+ * @param {string} username - Username to validate
+ * @returns {boolean} - Whether username is valid
+ */
 function isValidUsername(username) {
   if (typeof username !== 'string') return false;
   const trimmed = username.trim();
@@ -521,6 +457,11 @@ function isValidUsername(username) {
   return usernameRegex.test(trimmed);
 }
 
+/**
+ * Validate message text
+ * @param {string} text - Message text to validate
+ * @returns {boolean} - Whether text is valid
+ */
 function isValidMessageText(text) {
   if (typeof text !== 'string') return false;
   const trimmed = text.trim();
@@ -530,6 +471,11 @@ function isValidMessageText(text) {
   return !controlCharRegex.test(trimmed);
 }
 
+/**
+ * Validate URL for profile photos
+ * @param {string} url - URL to validate
+ * @returns {boolean} - Whether URL is valid
+ */
 function isValidProfilePhotoURL(url) {
   if (typeof url !== 'string') return false;
   if (url.length > 500) return false;
@@ -543,6 +489,11 @@ function isValidProfilePhotoURL(url) {
   return allowedPatterns.some(pattern => pattern.test(url));
 }
 
+/**
+ * Enhanced message validation before posting
+ * @param {string} text - Message text to validate
+ * @returns {Object} - Validation result with valid flag and error/text
+ */
 function validateMessageBeforePost(text) {
   if (typeof text !== 'string') {
     return { valid: false, error: "Invalid message format" };
@@ -566,16 +517,32 @@ function validateMessageBeforePost(text) {
   return { valid: true, text: trimmed };
 }
 
+/**
+ * Safely set element text content (prevents XSS)
+ * @param {HTMLElement|null} element - Target element
+ * @param {string} text - Text content
+ */
 function setTextSafely(element, text) {
   if (element && element instanceof HTMLElement) {
     element.textContent = text || '';
   }
 }
 
+/**
+ * Safely create text node (prevents XSS)
+ * @param {string} text - Text content
+ * @returns {Text} - Text node
+ */
 function createSafeTextNode(text) {
   return document.createTextNode(text || '');
 }
 
+/**
+ * Debounce function for performance
+ * @param {Function} func - Function to debounce
+ * @param {number} wait - Wait time in ms
+ * @returns {Function} - Debounced function
+ */
 function debounce(func, wait) {
   let timeout;
   return function executedFunction(...args) {
@@ -588,6 +555,12 @@ function debounce(func, wait) {
   };
 }
 
+/**
+ * Throttle function for performance
+ * @param {Function} func - Function to throttle
+ * @param {number} limit - Limit time in ms
+ * @returns {Function} - Throttled function
+ */
 function throttle(func, limit) {
   let inThrottle;
   return function(...args) {
@@ -599,6 +572,11 @@ function throttle(func, limit) {
   };
 }
 
+/**
+ * Escape CSS selector to prevent injection
+ * @param {string} selector - Selector to escape
+ * @returns {string} - Escaped selector
+ */
 function escapeSelector(selector) {
   if (typeof selector !== 'string') return '';
   return CSS.escape(selector);
@@ -772,6 +750,7 @@ const state = {
   currentProfilePhotoURL: null,
   isCurrentUserAdmin: false,
   
+  // Device tracking
   deviceInfo: null,
   
   userProfiles: {},
@@ -805,19 +784,11 @@ const state = {
   isInitialized: false,
   isBanned: false,
   isDeviceBanned: false,
-  
-  // PERFORMANCE: Track render state
-  isFirstRender: true,
-  lastRenderTime: 0,
-  renderQueue: [],
-  isProcessingQueue: false,
 };
 
-// Anti-Spam State
-const spamTracker = {
-  messageTimestamps: [],
-  warningShown: false,
-  lastCleanup: Date.now(),
+const rateLimitState = {
+  lastMessageTime: 0,
+  isRateLimited: false
 };
 
 const unsubscribers = {
@@ -853,20 +824,8 @@ const USER_COLORS = Object.freeze([
 const MESSAGE_MAX_LENGTH = 500;
 const USERNAME_MAX_LENGTH = 30;
 const TYPING_TIMEOUT = 3000;
+const RATE_LIMIT_MS = 2000;
 const TYPING_STALE_THRESHOLD = 5000;
-
-// PERFORMANCE: Render timing constants
-const RENDER_DEBOUNCE_MS = 16; // ~60fps
-const BATCH_SIZE = 10; // Process 10 messages at a time
-const IDLE_CALLBACK_TIMEOUT = 50;
-
-// Anti-Spam Configuration
-const SPAM_CONFIG = Object.freeze({
-  MAX_MESSAGES: 10,
-  TIME_WINDOW: 20000,
-  WARNING_THRESHOLD: 7,
-  CLEANUP_INTERVAL: 30000,
-});
 
 // ============================================================
 // UTILITY FUNCTIONS
@@ -949,242 +908,6 @@ function cleanupAllListeners() {
       }
     }
   });
-}
-
-function cleanupNonBanListeners() {
-  const banListenerKeys = ['banCheck', 'deviceBanCheck', 'ipBanCheck'];
-  
-  Object.entries(unsubscribers).forEach(([key, unsub]) => {
-    if (banListenerKeys.includes(key)) return;
-    
-    if (typeof unsub === 'function') {
-      try {
-        unsub();
-        unsubscribers[key] = () => {};
-      } catch (e) {
-        console.warn(`Failed to unsubscribe ${key}:`, e);
-      }
-    }
-  });
-}
-
-// ============================================================
-// ANTI-SPAM SYSTEM
-// ============================================================
-
-function cleanupSpamTracker() {
-  const now = Date.now();
-  const cutoff = now - SPAM_CONFIG.TIME_WINDOW;
-  
-  spamTracker.messageTimestamps = spamTracker.messageTimestamps.filter(
-    ts => ts > cutoff
-  );
-  
-  if (spamTracker.messageTimestamps.length < SPAM_CONFIG.WARNING_THRESHOLD) {
-    spamTracker.warningShown = false;
-  }
-  
-  spamTracker.lastCleanup = now;
-}
-
-function checkSpamStatus() {
-  const now = Date.now();
-  
-  if (now - spamTracker.lastCleanup > SPAM_CONFIG.CLEANUP_INTERVAL) {
-    cleanupSpamTracker();
-  }
-  
-  const cutoff = now - SPAM_CONFIG.TIME_WINDOW;
-  spamTracker.messageTimestamps = spamTracker.messageTimestamps.filter(
-    ts => ts > cutoff
-  );
-  
-  const messageCount = spamTracker.messageTimestamps.length;
-  
-  if (messageCount >= SPAM_CONFIG.MAX_MESSAGES) {
-    return { 
-      allowed: false, 
-      reason: 'spam_limit',
-      shouldBan: true 
-    };
-  }
-  
-  if (messageCount >= SPAM_CONFIG.WARNING_THRESHOLD && !spamTracker.warningShown) {
-    spamTracker.warningShown = true;
-    const remaining = SPAM_CONFIG.MAX_MESSAGES - messageCount;
-    return { 
-      allowed: true, 
-      warning: ` Spamming = Getting Banned ⚠️.`
-    };
-  }
-  
-  return { allowed: true };
-}
-
-function recordMessage() {
-  spamTracker.messageTimestamps.push(Date.now());
-}
-
-async function autoBanForSpam() {
-  if (!state.db || !state.currentUserId) return;
-  
-  console.log('Auto-banning user for spam...');
-  
-  try {
-    const batch = writeBatch(state.db);
-    
-    const userRef = doc(state.db, "users", state.currentUserId);
-    batch.set(userRef, { banned: true }, { merge: true });
-    
-    const banRef = doc(state.db, "banned_users", state.currentUserId);
-    batch.set(banRef, {
-      bannedBy: "SYSTEM_AUTO_BAN",
-      timestamp: serverTimestamp(),
-      reason: "Automatic ban: Spam detection (exceeded message limit)",
-      username: state.currentUsername || 'Unknown'
-    });
-    
-    if (state.deviceInfo?.fingerprint) {
-      const fingerprintBanRef = doc(state.db, "banned_devices", state.deviceInfo.fingerprint);
-      batch.set(fingerprintBanRef, {
-        fingerprint: state.deviceInfo.fingerprint,
-        userId: state.currentUserId,
-        username: state.currentUsername || 'Unknown',
-        bannedBy: "SYSTEM_AUTO_BAN",
-        timestamp: serverTimestamp(),
-        reason: "Automatic ban: Spam detection",
-        userAgent: state.deviceInfo.userAgent || null,
-        platform: state.deviceInfo.platform || null,
-      });
-    }
-    
-    if (state.deviceInfo?.ipHash) {
-      const ipBanRef = doc(state.db, "banned_ips", state.deviceInfo.ipHash);
-      batch.set(ipBanRef, {
-        ipHash: state.deviceInfo.ipHash,
-        ipAddress: state.deviceInfo.ipAddress || null,
-        userId: state.currentUserId,
-        username: state.currentUsername || 'Unknown',
-        bannedBy: "SYSTEM_AUTO_BAN",
-        timestamp: serverTimestamp(),
-        reason: "Automatic ban: Spam detection",
-      });
-    }
-    
-    if (state.deviceInfo?.ipAddress) {
-      const rawIpKey = state.deviceInfo.ipAddress.replace(/\./g, '_');
-      const rawIpBanRef = doc(state.db, "banned_ips", rawIpKey);
-      batch.set(rawIpBanRef, {
-        ipAddress: state.deviceInfo.ipAddress,
-        userId: state.currentUserId,
-        username: state.currentUsername || 'Unknown',
-        bannedBy: "SYSTEM_AUTO_BAN",
-        timestamp: serverTimestamp(),
-        reason: "Automatic ban: Spam detection",
-      });
-    }
-    
-    await batch.commit();
-    
-    console.log('User auto-banned for spam');
-    
-    state.isBanned = true;
-    state.isDeviceBanned = true;
-    
-    showSpamBannedScreen();
-    
-  } catch (error) {
-    console.error('Auto-ban error:', error);
-    showSpamBannedScreen();
-  }
-}
-
-function showSpamBannedScreen() {
-  const appContainer = document.getElementById('app') || document.body;
-  Array.from(appContainer.children).forEach(child => {
-    if (child.id !== 'banOverlayScreen') {
-      child.style.display = 'none';
-    }
-  });
-  
-  const existingOverlay = document.getElementById('banOverlayScreen');
-  if (existingOverlay) existingOverlay.remove();
-  
-  const overlay = document.createElement('div');
-  overlay.id = 'banOverlayScreen';
-  overlay.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background-color: #0a0a0a;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 99999;
-    gap: 0.5rem;
-    padding: 1rem;
-    text-align: center;
-  `;
-  
-  const h1 = document.createElement('h1');
-  h1.style.cssText = 'font-size: 1.875rem; color: #ef4444; font-weight: bold;';
-  h1.textContent = '🚫 BANNED FOR SPAMMING';
-  
-  const p1 = document.createElement('p');
-  p1.style.cssText = 'color: #888; font-size: 0.875rem;';
-  p1.textContent = 'You have been banned by ADMIN for SPAMMING.';
-  
-  const p2 = document.createElement('p');
-  p2.style.cssText = 'color: #666; font-size: 0.75rem;';
-  p2.textContent = `Reason: Mana kiya tha Maat kar.`;
-  
-  const p3 = document.createElement('p');
-  p3.style.cssText = 'color: #555; font-size: 0.7rem; margin-top: 1rem;';
-  p3.textContent = 'Le Lauda ho gya BAN.';
-  
-  overlay.appendChild(h1);
-  overlay.appendChild(p1);
-  overlay.appendChild(p2);
-  overlay.appendChild(p3);
-  
-  document.body.appendChild(overlay);
-}
-
-function showSpamWarning(message) {
-  const existingToast = document.getElementById('spam-warning-toast');
-  if (existingToast) {
-    existingToast.remove();
-  }
-  
-  const toast = document.createElement('div');
-  toast.id = 'spam-warning-toast';
-  toast.style.cssText = `
-    position: fixed;
-    top: 70px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: linear-gradient(135deg, #ff6b6b, #ee5a5a);
-    color: white;
-    padding: 12px 24px;
-    border-radius: 8px;
-    font-weight: bold;
-    font-size: 14px;
-    z-index: 10000;
-    box-shadow: 0 4px 20px rgba(238, 90, 90, 0.4);
-    animation: slideDown 0.3s ease-out, shake 0.5s ease-in-out;
-    text-align: center;
-    max-width: 90%;
-  `;
-  toast.textContent = message;
-  
-  document.body.appendChild(toast);
-  
-  setTimeout(() => {
-    if (toast.parentNode) {
-      toast.style.animation = 'fadeOut 0.3s ease-out forwards';
-      setTimeout(() => toast.remove(), 300);
-    }
-  }, 4000);
 }
 
 function updateCharacterCounter(input, counter) {
@@ -1405,6 +1128,9 @@ async function togglePinMessage() {
   }
 }
 
+/**
+ * Toggle ban status of a user - WITH FRESH DATA CHECK AND PROPER UNBAN
+ */
 async function toggleBanUser() {
   if (!state.currentContextMenuData || !state.db) return;
   
@@ -1418,6 +1144,7 @@ async function toggleBanUser() {
 
   hideDropdownMenu();
   
+  // FIXED: Fetch fresh ban status from Firestore instead of using cache
   let isBanned = false;
   try {
     const banDocRef = doc(state.db, "banned_users", userId);
@@ -1443,13 +1170,17 @@ async function toggleBanUser() {
   try {
     const batch = writeBatch(state.db);
     
+    // 1. Update user document
     const userRef = doc(state.db, "users", userId);
     if (isBanned) {
+      // UNBANNING: Set banned to false explicitly
       batch.update(userRef, { banned: false });
     } else {
+      // BANNING: Set banned to true
       batch.set(userRef, { banned: true }, { merge: true });
     }
     
+    // 2. Update banned_users collection
     const banRef = doc(state.db, "banned_users", userId);
     if (isBanned) {
       batch.delete(banRef);
@@ -1462,6 +1193,7 @@ async function toggleBanUser() {
       });
     }
     
+    // 3. Get user's device info and ban/unban devices
     const devicesQuery = query(
       collection(state.db, "user_devices"),
       where("userId", "==", userId)
@@ -1481,13 +1213,16 @@ async function toggleBanUser() {
     for (const deviceDoc of devicesSnapshot.docs) {
       const deviceData = deviceDoc.data();
       
+      // Ban/Unban fingerprint (avoid duplicates)
       if (deviceData.fingerprint && !processedFingerprints.has(deviceData.fingerprint)) {
         processedFingerprints.add(deviceData.fingerprint);
         const fingerprintBanRef = doc(state.db, "banned_devices", deviceData.fingerprint);
         
         if (isBanned) {
+          // UNBANNING: Delete the ban document
           batch.delete(fingerprintBanRef);
         } else {
+          // BANNING: Create ban document
           batch.set(fingerprintBanRef, {
             fingerprint: deviceData.fingerprint,
             userId: userId,
@@ -1501,6 +1236,7 @@ async function toggleBanUser() {
         }
       }
       
+      // Ban/Unban IP hash (avoid duplicates)
       if (deviceData.ipHash && !processedIPs.has(deviceData.ipHash)) {
         processedIPs.add(deviceData.ipHash);
         const ipBanRef = doc(state.db, "banned_ips", deviceData.ipHash);
@@ -1520,6 +1256,7 @@ async function toggleBanUser() {
         }
       }
       
+      // Also handle raw IP if available (avoid duplicates)
       if (deviceData.ipAddress) {
         const rawIpKey = deviceData.ipAddress.replace(/\./g, '_');
         if (!processedIPs.has(rawIpKey)) {
@@ -1544,6 +1281,7 @@ async function toggleBanUser() {
     
     await batch.commit();
     
+    // Update local cache
     if (state.userProfiles[userId]) {
       state.userProfiles[userId].banned = !isBanned;
     }
@@ -1570,6 +1308,7 @@ async function toggleBanUser() {
 
 async function initFirebase() {
   try {
+    // First, initialize device identification
     console.log('Initializing device identification...');
     state.deviceInfo = await initializeDeviceIdentification();
     
@@ -1595,6 +1334,7 @@ async function initFirebase() {
       state.db = initializeFirestore(state.app, {});
     }
 
+    // Check for device-level ban BEFORE authentication
     console.log('Checking device ban status...');
     const deviceBanCheck = await checkDeviceBan(state.db, state.deviceInfo);
     
@@ -1621,6 +1361,7 @@ async function handleAuthStateChange(user) {
     state.currentUserId = user.uid;
     console.log("Authenticated with UID:", state.currentUserId);
 
+    // Register device with user association
     await registerDevice(state.db, state.currentUserId, state.deviceInfo);
 
     state.confessionsCollection = collection(state.db, "confessions");
@@ -1648,6 +1389,7 @@ async function handleAuthStateChange(user) {
       console.error("Profile load failed:", e);
     }
 
+    // Hide the loading overlay
     hideBanCheckOverlay();
 
     initScrollObserver();
@@ -1732,7 +1474,7 @@ function listenForPinnedMessages() {
 }
 
 // ============================================================
-// BAN STATUS
+// BAN STATUS - FIXED TO HANDLE UNBAN
 // ============================================================
 
 function listenForBanStatus() {
@@ -1747,16 +1489,19 @@ function listenForBanStatus() {
     doc(state.db, "banned_users", state.currentUserId), 
     (docSnap) => {
       if (docSnap.exists()) {
+        // User is banned
         if (!state.isBanned) {
           state.isBanned = true;
           state.userProfiles = {};
-          cleanupNonBanListeners();
+          cleanupAllListeners();
           showBannedScreen();
         }
       } else {
+        // User is NOT banned (unbanned or never banned)
         if (state.isBanned) {
           state.isBanned = false;
-          showUnbannedScreen();
+          // Show recovery message - user needs to refresh
+          showUnbannedRecoveryScreen();
         }
       }
     },
@@ -1766,7 +1511,11 @@ function listenForBanStatus() {
   );
 }
 
+/**
+ * Listen for device-level bans (fingerprint & IP) - FIXED
+ */
 function listenForDeviceBans() {
+  // Cleanup existing listeners
   if (typeof unsubscribers.deviceBanCheck === 'function') {
     unsubscribers.deviceBanCheck();
     unsubscribers.deviceBanCheck = () => {};
@@ -1778,18 +1527,21 @@ function listenForDeviceBans() {
   
   if (!state.db || !state.deviceInfo?.fingerprint) return;
 
+  // Listen for fingerprint ban
   unsubscribers.deviceBanCheck = onSnapshot(
     doc(state.db, "banned_devices", state.deviceInfo.fingerprint), 
     (docSnap) => {
       if (docSnap.exists()) {
         if (!state.isDeviceBanned) {
           state.isDeviceBanned = true;
-          cleanupNonBanListeners();
+          cleanupAllListeners();
           showDeviceBannedScreen('Device fingerprint banned');
         }
       } else {
+        // Device is unbanned
         if (state.isDeviceBanned) {
-          checkFullUnbanStatus();
+          // Check if IP is also unbanned before recovering
+          checkAndRecoverFromBan();
         }
       }
     },
@@ -1798,6 +1550,7 @@ function listenForDeviceBans() {
     }
   );
   
+  // Listen for IP ban - NOW STORED PROPERLY
   if (state.deviceInfo.ipHash) {
     unsubscribers.ipBanCheck = onSnapshot(
       doc(state.db, "banned_ips", state.deviceInfo.ipHash), 
@@ -1805,12 +1558,13 @@ function listenForDeviceBans() {
         if (docSnap.exists()) {
           if (!state.isDeviceBanned) {
             state.isDeviceBanned = true;
-            cleanupNonBanListeners();
+            cleanupAllListeners();
             showDeviceBannedScreen('IP address banned');
           }
         } else {
+          // IP is unbanned - check if fingerprint is also unbanned
           if (state.isDeviceBanned) {
-            checkFullUnbanStatus();
+            checkAndRecoverFromBan();
           }
         }
       },
@@ -1821,101 +1575,110 @@ function listenForDeviceBans() {
   }
 }
 
-function showUnbannedScreen() {
-  const banOverlay = document.getElementById('banOverlayScreen');
-  if (banOverlay) banOverlay.remove();
+/**
+ * Show recovery screen when user is unbanned
+ * User needs to refresh to continue using the app
+ */
+function showUnbannedRecoveryScreen() {
+  // If body was replaced with banned screen, show recovery
+  const existingContent = document.getElementById('feedContainer');
   
-  const overlay = document.createElement('div');
-  overlay.id = 'unbanOverlayScreen';
-  overlay.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background-color: #0a0a0a;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 99999;
-    gap: 1rem;
-  `;
+  if (!existingContent) {
+    // Body was replaced, show recovery screen
+    document.body.innerHTML = '';
+    document.body.className = 'banned-overlay';
+    document.body.style.background = '#0a0a0a';
+    
+    const container = document.createElement('div');
+    container.className = 'text-center p-6';
+    
+    const h1 = document.createElement('h1');
+    h1.className = 'text-3xl mb-4';
+    h1.style.color = '#22c55e';
+    h1.textContent = '✅ ACCESS RESTORED';
+    
+    const p = document.createElement('p');
+    p.style.color = '#888';
+    p.className = 'mb-6';
+    p.textContent = 'Your ban has been lifted. Please refresh to continue.';
+    
+    const btn = document.createElement('button');
+    btn.className = 'px-6 py-3 bg-white text-black rounded-lg font-bold';
+    btn.style.cursor = 'pointer';
+    btn.textContent = 'REFRESH PAGE';
+    btn.onclick = () => window.location.reload();
+    
+    container.appendChild(h1);
+    container.appendChild(p);
+    container.appendChild(btn);
+    document.body.appendChild(container);
+  } else {
+    // App is still intact, just reset state
+    state.isBanned = false;
+    state.isDeviceBanned = false;
+  }
+}
+
+/**
+ * Check if device is fully unbanned and recover
+ */
+async function checkAndRecoverFromBan() {
+  if (!state.db || !state.deviceInfo) return;
   
-  const h1 = document.createElement('h1');
-  h1.style.cssText = 'font-size: 1.875rem; color: #22c55e; font-weight: bold;';
-  h1.textContent = '✅ ACCESS RESTORED';
-  
-  const p = document.createElement('p');
-  p.style.cssText = 'color: #888; font-size: 0.875rem; text-align: center; max-width: 300px;';
-  p.textContent = 'Your ban has been lifted. Click below to continue using Konvo.';
-  
-  const btn = document.createElement('button');
-  btn.style.cssText = `
-    margin-top: 1.5rem;
-    padding: 0.75rem 2rem;
-    background-color: #22c55e;
-    color: #000;
-    border: none;
-    border-radius: 8px;
-    font-weight: bold;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: transform 0.2s, background-color 0.2s;
-  `;
-  btn.textContent = 'CONTINUE';
-  btn.onmouseover = () => btn.style.backgroundColor = '#16a34a';
-  btn.onmouseout = () => btn.style.backgroundColor = '#22c55e';
-  btn.onclick = () => window.location.reload();
-  
-  overlay.appendChild(h1);
-  overlay.appendChild(p);
-  overlay.appendChild(btn);
-  
-  document.body.appendChild(overlay);
+  try {
+    // Check fingerprint ban
+    if (state.deviceInfo.fingerprint) {
+      const fingerprintBanRef = doc(state.db, "banned_devices", state.deviceInfo.fingerprint);
+      const fingerprintSnap = await getDoc(fingerprintBanRef);
+      
+      if (fingerprintSnap.exists()) {
+        return; // Still banned by fingerprint
+      }
+    }
+    
+    // Check IP ban
+    if (state.deviceInfo.ipHash) {
+      const ipBanRef = doc(state.db, "banned_ips", state.deviceInfo.ipHash);
+      const ipSnap = await getDoc(ipBanRef);
+      
+      if (ipSnap.exists()) {
+        return; // Still banned by IP
+      }
+    }
+    
+    // Check raw IP ban
+    if (state.deviceInfo.ipAddress) {
+      const rawIpKey = state.deviceInfo.ipAddress.replace(/\./g, '_');
+      const rawIpBanRef = doc(state.db, "banned_ips", rawIpKey);
+      const rawIpSnap = await getDoc(rawIpBanRef);
+      
+      if (rawIpSnap.exists()) {
+        return; // Still banned by raw IP
+      }
+    }
+    
+    // All clear - show recovery
+    state.isDeviceBanned = false;
+    showUnbannedRecoveryScreen();
+    
+  } catch (error) {
+    console.error("Error checking ban recovery:", error);
+  }
 }
 
 function showBannedScreen() {
-  const appContainer = document.getElementById('app') || document.body;
-  
-  Array.from(appContainer.children).forEach(child => {
-    if (child.id !== 'banOverlayScreen') {
-      child.style.display = 'none';
-    }
-  });
-  
-  const existingOverlay = document.getElementById('banOverlayScreen');
-  if (existingOverlay) existingOverlay.remove();
-  
-  const overlay = document.createElement('div');
-  overlay.id = 'banOverlayScreen';
-  overlay.className = 'banned-overlay';
-  overlay.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background-color: #0a0a0a;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 99999;
-    gap: 1rem;
-  `;
+  document.body.innerHTML = '';
+  document.body.className = 'banned-overlay';
   
   const h1 = document.createElement('h1');
-  h1.style.cssText = 'font-size: 1.875rem; color: #ef4444; font-weight: bold;';
-  h1.textContent = '🚫 ACCESS DENIED';
+  h1.className = "text-3xl";
+  h1.textContent = "🚫 ACCESS DENIED";
   
   const p = document.createElement('p');
-  p.style.cssText = 'color: #888; font-size: 0.875rem;';
-  p.textContent = 'You have been banned from Konvo.';
+  p.textContent = "You have been banned from Konvo.";
   
-  const p2 = document.createElement('p');
-  p2.style.cssText = 'color: #555; font-size: 0.75rem; margin-top: 1rem;';
-  p2.textContent = 'If you believe this is a mistake, please wait for admin review.';
-  
-  overlay.appendChild(h1);
-  overlay.appendChild(p);
-  overlay.appendChild(p2);
-  
-  document.body.appendChild(overlay);
+  document.body.appendChild(h1);
+  document.body.appendChild(p);
 }
 
 // ============================================================
@@ -2032,10 +1795,7 @@ async function loadPendingProfiles() {
     }
   }
   
-  // PERFORMANCE: Use requestAnimationFrame for DOM updates
-  requestAnimationFrame(() => {
-    updateDisplayedUsernames();
-  });
+  updateDisplayedUsernames();
 }
 
 function updateDisplayedUsernames() {
@@ -2093,9 +1853,7 @@ function listenForUserProfiles() {
             }
           });
           
-          requestAnimationFrame(() => {
-            updateDisplayedUsernames();
-          });
+          updateDisplayedUsernames();
         },
         (error) => {
           console.error("User profiles listener error:", error);
@@ -2402,7 +2160,7 @@ async function toggleReaction(docId, collectionName, reactionType, hasReacted) {
 }
 
 // ============================================================
-// CONTEXT MENU
+// CONTEXT MENU (continued)
 // ============================================================
 
 function showDropdownMenu(event, data) {
@@ -2444,7 +2202,9 @@ function showDropdownMenu(event, data) {
   if (menuBan) {
     menuBan.style.display = (isAdmin && !isMine) ? "block" : "none";
     
+    // FIXED: Fetch fresh ban status instead of using cached data
     if (isAdmin && !isMine && data.userId) {
+      // Update the menu text asynchronously
       (async () => {
         try {
           const banDocRef = doc(state.db, "banned_users", data.userId);
@@ -2658,11 +2418,6 @@ function showPage(page) {
   
   state.currentPage = page;
   
-  // PERFORMANCE: Clear message cache when switching pages
-  messageCache.messages.clear();
-  messageCache.order = [];
-  state.isFirstRender = true;
-  
   if (state.isSelectionMode) exitSelectionMode();
   cancelReplyMode();
   
@@ -2734,9 +2489,33 @@ function showPage(page) {
 // REAL-TIME LISTENERS
 // ============================================================
 
+function safeRenderFeed(docs, type, snapshot, isRerender, isFirstSnapshot = false) {
+  try {
+    renderFeed(docs, type, snapshot, isRerender, isFirstSnapshot);
+  } catch (error) {
+    console.error('Render error:', error);
+    
+    if (feedContainer) {
+      feedContainer.innerHTML = '';
+      
+      const errorDiv = document.createElement("div");
+      errorDiv.className = "text-center p-4 text-red-500";
+      errorDiv.textContent = "Error rendering messages. Please refresh.";
+      
+      const retryBtn = document.createElement("button");
+      retryBtn.className = "mt-2 px-4 py-2 bg-white text-black rounded";
+      retryBtn.textContent = "Retry";
+      retryBtn.onclick = () => showPage(state.currentPage);
+      
+      feedContainer.appendChild(errorDiv);
+      feedContainer.appendChild(retryBtn);
+    }
+  }
+}
+
 function listenForConfessions(isRerender = false) {
   if (isRerender) {
-    renderFeedOptimized(state.lastConfessionDocs, "confessions", null, true);
+    safeRenderFeed(state.lastConfessionDocs, "confessions", null, true);
     return;
   }
   
@@ -2760,7 +2539,7 @@ function listenForConfessions(isRerender = false) {
     query(state.confessionsCollection, orderBy("timestamp", "asc")),
     (snapshot) => {
       state.lastConfessionDocs = snapshot.docs;
-      renderFeedOptimized(state.lastConfessionDocs, "confessions", snapshot, false, isFirstSnapshot);
+      safeRenderFeed(state.lastConfessionDocs, "confessions", snapshot, false, isFirstSnapshot);
       isFirstSnapshot = false;
     },
     (error) => {
@@ -2778,7 +2557,7 @@ function listenForConfessions(isRerender = false) {
 
 function listenForChat(isRerender = false) {
   if (isRerender) {
-    renderFeedOptimized(state.lastChatDocs, "chat", null, true);
+    safeRenderFeed(state.lastChatDocs, "chat", null, true);
     return;
   }
   
@@ -2802,7 +2581,7 @@ function listenForChat(isRerender = false) {
     query(state.chatCollection, orderBy("timestamp", "asc")),
     (snapshot) => {
       state.lastChatDocs = snapshot.docs;
-      renderFeedOptimized(state.lastChatDocs, "chat", snapshot, false, isFirstSnapshot);
+      safeRenderFeed(state.lastChatDocs, "chat", snapshot, false, isFirstSnapshot);
       isFirstSnapshot = false;
     },
     (error) => {
@@ -2893,342 +2672,14 @@ const updateTypingStatus = debounce(async (isTyping) => {
 }, 300);
 
 // ============================================================
-// PERFORMANCE: OPTIMIZED RENDER FEED
+// RENDER FEED
 // ============================================================
 
-/**
- * Create a single message element - optimized version
- */
-function createMessageElement(docInstance, type, lastUserId, lastDateString) {
-  const data = docInstance.data();
-  const docId = docInstance.id;
-  
-  // Skip hidden messages
-  if (data.hiddenFor?.includes(state.currentUserId)) {
-    return { element: null, lastUserId, lastDateString, skipped: true };
-  }
-
-  const text = data.text || "...";
-  const messageDateObj = data.timestamp ? data.timestamp.toDate() : new Date();
-  const messageDateStr = messageDateObj.toDateString();
-  const docUserId = data.userId;
-  
-  // Request profile loading (non-blocking)
-  if (docUserId && !state.userProfiles[docUserId]) {
-    requestUserProfile(docUserId);
-  }
-  if (data.replyTo?.userId && !state.userProfiles[data.replyTo.userId]) {
-    requestUserProfile(data.replyTo.userId);
-  }
-
-  const elements = [];
-  
-  // Date separator
-  if (lastDateString !== messageDateStr) {
-    const sepDiv = document.createElement('div');
-    sepDiv.className = 'date-separator';
-    const sepSpan = document.createElement('span');
-    sepSpan.textContent = getDateHeader(messageDateObj);
-    sepDiv.appendChild(sepSpan);
-    elements.push(sepDiv);
-    lastDateString = messageDateStr;
-    lastUserId = null;
-  }
-
-  const profile = state.userProfiles[docUserId] || {};
-  const username = profile.username || "Anonymous";
-  const firstChar = (username[0] || "?").toUpperCase();
-  const photoURL = profile.profilePhotoURL || 
-    `https://placehold.co/32x32/000000/ffffff?text=${encodeURIComponent(firstChar)}`;
-  
-  const isMine = state.currentUserId && docUserId === state.currentUserId;
-  const isConsecutive = docUserId && docUserId === lastUserId;
-  const userColor = getUserColor(docUserId);
-
-  // Align wrapper
-  const alignWrapper = document.createElement("div");
-  alignWrapper.className = `flex w-full ${isMine ? "justify-end" : "justify-start"}`;
-  
-  // Message wrapper
-  const row = document.createElement("div");
-  row.className = "message-wrapper";
-
-  // Message bubble
-  const bubble = document.createElement("div");
-  bubble.className = `message-bubble rounded-lg max-w-xs sm:max-w-md md:max-w-lg ${isMine ? "my-message" : ""}`;
-  
-  if (data.isPinned) {
-    bubble.classList.add("pinned");
-  }
-  
-  // Set data attributes
-  bubble.dataset.id = docId;
-  bubble.dataset.text = text;
-  bubble.dataset.isMine = String(isMine);
-  bubble.dataset.userId = docUserId || '';
-  bubble.dataset.username = username;
-  bubble.dataset.isPinned = String(data.isPinned || false);
-  bubble.dataset.timestamp = data.timestamp ? String(data.timestamp.toMillis()) : String(Date.now());
-  
-  if (!isMine) {
-    bubble.style.borderLeft = `3px solid ${userColor}`;
-    bubble.style.background = `linear-gradient(90deg, ${userColor}10, transparent)`;
-  }
-  
-  if (state.isSelectionMode && state.selectedMessages.has(docId)) {
-    bubble.classList.add("selected-message");
-  }
-  
-  // Click handler for selection mode
-  bubble.addEventListener('click', (e) => {
-    if (state.isSelectionMode) {
-      e.preventDefault();
-      e.stopPropagation();
-      handleMessageClick(bubble);
-    }
-  });
-
-  // Kebab button
-  const kebabBtn = document.createElement("button");
-  kebabBtn.type = "button";
-  kebabBtn.className = "kebab-btn";
-  kebabBtn.setAttribute("aria-label", "Message options");
-  kebabBtn.appendChild(createKebabIcon());
-  kebabBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    showDropdownMenu(e, bubble.dataset);
-  });
-
-  // Header (only for non-consecutive messages)
-  if (!isConsecutive) {
-    const headerElement = document.createElement("div");
-    headerElement.className = `flex items-center gap-1.5 mb-1 ${isMine ? "justify-end" : "justify-start"}`;
-    
-    const imgElement = document.createElement("img");
-    imgElement.src = photoURL;
-    imgElement.alt = "";
-    imgElement.className = `chat-pfp ${isMine ? "order-2" : "order-1"}`;
-    imgElement.loading = "lazy";
-    imgElement.draggable = false;
-    if (!isMine) imgElement.style.borderColor = userColor;
-    
-    imgElement.onerror = function() {
-      this.src = `https://placehold.co/32x32/000000/ffffff?text=${encodeURIComponent(firstChar)}`;
-    };
-    
-    const usernameElement = document.createElement("div");
-    usernameElement.className = `font-bold text-sm opacity-90 ${isMine ? "order-1 text-right" : "order-2 text-left"}`;
-    usernameElement.textContent = username;
-    if (!isMine) usernameElement.style.color = userColor;
-    
-    headerElement.appendChild(imgElement);
-    headerElement.appendChild(usernameElement);
-    bubble.appendChild(headerElement);
-  }
-
-  // Reply preview
-  if (data.replyTo) {
-    const replyPreview = document.createElement("div");
-    replyPreview.className = "reply-preview";
-    
-    const replyAuthorEl = document.createElement("div");
-    replyAuthorEl.className = "reply-author";
-    replyAuthorEl.textContent = state.userProfiles[data.replyTo.userId]?.username || "Anonymous";
-    
-    if (!isMine) {
-      replyPreview.style.borderLeftColor = userColor;
-      replyAuthorEl.style.color = userColor;
-    }
-    
-    const replyTextEl = document.createElement("div");
-    replyTextEl.className = "reply-text";
-    replyTextEl.textContent = data.replyTo.text;
-    
-    replyPreview.appendChild(replyAuthorEl);
-    replyPreview.appendChild(replyTextEl);
-    
-    replyPreview.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const escapedId = escapeSelector(data.replyTo.messageId);
-      const originalBubble = document.querySelector(`.message-bubble[data-id="${escapedId}"]`);
-      if (originalBubble) {
-        originalBubble.scrollIntoView({ behavior: "smooth", block: "center" });
-        originalBubble.style.backgroundColor = "rgba(255, 255, 255, 0.1)";
-        setTimeout(() => {
-          originalBubble.style.backgroundColor = "";
-        }, 1000);
-      }
-    });
-    
-    bubble.appendChild(replyPreview);
-  }
-
-  // Text content
-  const textElement = document.createElement("p");
-  textElement.className = "text-left";
-  
-  if (data.isPinned) {
-    const pinIcon = document.createElement("span");
-    pinIcon.className = "text-amber-400 mr-1";
-    pinIcon.setAttribute("aria-hidden", "true");
-    pinIcon.textContent = "📌";
-    textElement.appendChild(pinIcon);
-  }
-  
-  textElement.appendChild(document.createTextNode(text));
-  bubble.appendChild(textElement);
-
-  // Footer with timestamp
-  const footerDiv = document.createElement("div");
-  footerDiv.className = "bubble-footer";
-  footerDiv.style.justifyContent = isMine ? "flex-end" : "flex-start";
-  
-  const timeElement = document.createElement("span");
-  timeElement.className = "inner-timestamp";
-  timeElement.dataset.ts = data.timestamp ? String(data.timestamp.toMillis()) : String(Date.now());
-  
-  let timeText = formatMessageTime(messageDateObj);
-  if (data.edited) timeText += " (edited)";
-  timeElement.textContent = timeText;
-  
-  footerDiv.appendChild(timeElement);
-  bubble.appendChild(footerDiv);
-
-  // Reactions
-  const docReactions = data.reactions || {};
-  const chipsContainer = document.createElement("div");
-  chipsContainer.className = "reaction-chips-container";
-  let hasChips = false;
-  
-  Object.keys(REACTION_TYPES).forEach(rtype => {
-    const userIds = docReactions[rtype] || [];
-    if (userIds.length > 0) {
-      hasChips = true;
-      const chip = document.createElement("div");
-      chip.className = "reaction-chip";
-      
-      const hasReacted = userIds.includes(state.currentUserId);
-      if (hasReacted) chip.classList.add("user-reacted");
-      
-      const emojiSpan = document.createElement("span");
-      emojiSpan.textContent = REACTION_TYPES[rtype];
-      
-      const countSpan = document.createElement("span");
-      countSpan.textContent = ` ${userIds.length}`;
-      
-      chip.appendChild(emojiSpan);
-      chip.appendChild(countSpan);
-      
-      chip.onclick = (e) => {
-        e.stopPropagation();
-        toggleReaction(docId, type, rtype, hasReacted);
-      };
-      
-      chipsContainer.appendChild(chip);
-    }
-  });
-  
-  if (hasChips) {
-    bubble.appendChild(chipsContainer);
-    bubble.classList.add("has-reactions");
-  }
-
-  // Action buttons
-  const replyBtn = document.createElement("button");
-  replyBtn.type = "button";
-  replyBtn.className = "side-action-btn";
-  replyBtn.setAttribute("aria-label", "Reply to message");
-  replyBtn.textContent = "↩";
-  replyBtn.onclick = (e) => {
-    e.stopPropagation();
-    startReplyMode(bubble.dataset);
-  };
-
-  const reactBtn = document.createElement("button");
-  reactBtn.type = "button";
-  reactBtn.className = "side-action-btn";
-  reactBtn.setAttribute("aria-label", "Add reaction");
-  reactBtn.textContent = "♡";
-
-  const picker = document.createElement("div");
-  picker.className = "reaction-picker hidden";
-  picker.setAttribute("role", "menu");
-  
-  Object.entries(REACTION_TYPES).forEach(([rtype, emoji]) => {
-    const opt = document.createElement("span");
-    opt.className = "reaction-option";
-    opt.setAttribute("role", "menuitem");
-    opt.textContent = emoji;
-    opt.onclick = (e) => {
-      e.stopPropagation();
-      const hasReacted = (docReactions[rtype] || []).includes(state.currentUserId);
-      toggleReaction(docId, type, rtype, hasReacted);
-      picker.classList.add("hidden");
-      picker.remove();
-    };
-    picker.appendChild(opt);
-  });
-
-  reactBtn.onclick = (e) => {
-    e.stopPropagation();
-    
-    document.querySelectorAll(".reaction-picker").forEach(p => {
-      p.classList.add("hidden");
-      p.remove();
-    });
-    
-    const rect = reactBtn.getBoundingClientRect();
-    picker.style.top = `${rect.top - 60}px`;
-    
-    if (window.innerWidth < 640) {
-      picker.style.left = "50%";
-      picker.style.transform = "translateX(-50%)";
-    } else {
-      picker.style.left = `${rect.left}px`;
-    }
-    
-    picker.classList.remove("hidden");
-    document.body.appendChild(picker);
-  };
-
-  // Bubble wrapper
-  const bubbleWrapper = document.createElement("div");
-  bubbleWrapper.className = `bubble-wrapper ${isMine ? "my-bubble-wrapper" : ""} ${isConsecutive ? "mt-0.5" : "mt-2"}`;
-  bubbleWrapper.appendChild(kebabBtn);
-  bubbleWrapper.appendChild(bubble);
-
-  if (isMine) {
-    row.appendChild(reactBtn);
-    row.appendChild(replyBtn);
-    row.appendChild(bubbleWrapper);
-  } else {
-    row.appendChild(bubbleWrapper);
-    row.appendChild(replyBtn);
-    row.appendChild(reactBtn);
-  }
-  
-  alignWrapper.appendChild(row);
-  elements.push(alignWrapper);
-
-  return { 
-    elements, 
-    lastUserId: docUserId, 
-    lastDateString,
-    skipped: false,
-    docId
-  };
-}
-
-/**
- * PERFORMANCE: Optimized incremental render
- */
-function renderFeedOptimized(docs, type, snapshot, isRerender, isFirstSnapshot = false) {
+function renderFeed(docs, type, snapshot, isRerender, isFirstSnapshot = false) {
   if (!feedContainer) return;
   
-  // Clean up reaction pickers
   document.querySelectorAll(".reaction-picker").forEach(p => p.remove());
   
-  // Handle notifications for new messages
   if (!isRerender && snapshot) {
     snapshot.docChanges().forEach((change) => {
       if (change.type === "added") {
@@ -3250,257 +2701,352 @@ function renderFeedOptimized(docs, type, snapshot, isRerender, isFirstSnapshot =
     });
   }
 
+  const prevScrollTop = feedContainer.scrollTop;
   const wasAtBottom = state.userIsAtBottom;
   
-  // PERFORMANCE: For first render or full refresh, use DocumentFragment
-  if (state.isFirstRender || isFirstSnapshot || isRerender) {
-    state.isFirstRender = false;
-    
-    const fragment = document.createDocumentFragment();
-    
-    if (docs.length === 0) {
-      const emptyDiv = document.createElement("div");
-      emptyDiv.id = "loading";
-      emptyDiv.className = "text-center p-4 text-[#888888] text-sm";
-      emptyDiv.textContent = `NO ${type.toUpperCase()} YET. BE THE FIRST!`;
-      fragment.appendChild(emptyDiv);
-    } else {
-      let lastUserId = null;
-      let lastDateString = null;
-      
-      // Process messages in batches using requestAnimationFrame
-      docs.forEach((docInstance) => {
-        const result = createMessageElement(docInstance, type, lastUserId, lastDateString);
-        
-        if (!result.skipped && result.elements) {
-          result.elements.forEach(el => fragment.appendChild(el));
-          lastUserId = result.lastUserId;
-          lastDateString = result.lastDateString;
-          
-          // Cache the message
-          messageCache.messages.set(result.docId, {
-            data: docInstance.data(),
-            timestamp: Date.now()
-          });
-        }
-      });
-    }
-    
-    // Scroll anchor
-    const scrollAnchor = document.createElement("div");
-    scrollAnchor.id = "scrollAnchor";
-    scrollAnchor.style.height = "1px";
-    scrollAnchor.style.width = "100%";
-    fragment.appendChild(scrollAnchor);
-    
-    // Single DOM update
-    feedContainer.innerHTML = '';
-    feedContainer.appendChild(fragment);
-    
-    // Re-observe scroll anchor
-    if (state.bottomObserver) {
-      state.bottomObserver.disconnect();
-      const anchor = document.getElementById('scrollAnchor');
-      if (anchor) {
-        state.bottomObserver.observe(anchor);
-      }
-    }
-    
-    // Scroll handling
-    if (isFirstSnapshot && docs.length > 0) {
-      requestAnimationFrame(() => {
-        feedContainer.scrollTop = feedContainer.scrollHeight;
-        state.userIsAtBottom = true;
-      });
-    }
-    
+  feedContainer.innerHTML = "";
+
+  if (docs.length === 0) {
+    const emptyDiv = document.createElement("div");
+    emptyDiv.id = "loading";
+    emptyDiv.className = "text-center p-4 text-[#888888] text-sm";
+    emptyDiv.textContent = `NO ${type.toUpperCase()} YET. BE THE FIRST!`;
+    feedContainer.appendChild(emptyDiv);
     return;
   }
+
+  let lastUserId = null;
+  let lastDateString = null;
+
+  docs.forEach((docInstance) => {
+    const data = docInstance.data();
+    
+    if (data.hiddenFor?.includes(state.currentUserId)) {
+      return;
+    }
+
+    const text = data.text || "...";
+    const messageDateObj = data.timestamp ? data.timestamp.toDate() : new Date();
+    const messageDateStr = messageDateObj.toDateString();
+
+    const docUserId = data.userId;
+    if (docUserId && !state.userProfiles[docUserId]) {
+      requestUserProfile(docUserId);
+    }
+    
+    if (data.replyTo?.userId && !state.userProfiles[data.replyTo.userId]) {
+      requestUserProfile(data.replyTo.userId);
+    }
+
+    if (lastDateString !== messageDateStr) {
+      const sepDiv = document.createElement('div');
+      sepDiv.className = 'date-separator';
+      const sepSpan = document.createElement('span');
+      sepSpan.textContent = getDateHeader(messageDateObj);
+      sepDiv.appendChild(sepSpan);
+      feedContainer.appendChild(sepDiv);
+      lastDateString = messageDateStr;
+      lastUserId = null;
+    }
+
+    const profile = state.userProfiles[docUserId] || {};
+    const username = profile.username || "Anonymous";
+    const firstChar = (username[0] || "?").toUpperCase();
+    const photoURL = profile.profilePhotoURL || 
+      `https://placehold.co/32x32/000000/ffffff?text=${encodeURIComponent(firstChar)}`;
+    
+    const isMine = state.currentUserId && docUserId === state.currentUserId;
+    const isConsecutive = docUserId && docUserId === lastUserId;
+    lastUserId = docUserId;
+    
+    const userColor = getUserColor(docUserId);
+
+    const alignWrapper = document.createElement("div");
+    alignWrapper.className = `flex w-full ${isMine ? "justify-end" : "justify-start"}`;
+    
+    const row = document.createElement("div");
+    row.className = "message-wrapper";
+
+    const bubble = document.createElement("div");
+    bubble.className = `message-bubble rounded-lg max-w-xs sm:max-w-md md:max-w-lg ${isMine ? "my-message" : ""}`;
+    
+    if (data.isPinned) {
+      bubble.classList.add("pinned");
+    }
+    
+    bubble.dataset.id = docInstance.id;
+    bubble.dataset.text = text;
+    bubble.dataset.isMine = String(isMine);
+    bubble.dataset.userId = docUserId || '';
+    bubble.dataset.username = username;
+    bubble.dataset.isPinned = String(data.isPinned || false);
+    bubble.dataset.timestamp = data.timestamp ? String(data.timestamp.toMillis()) : String(Date.now());
+    
+    if (!isMine) {
+      bubble.style.borderLeft = `3px solid ${userColor}`;
+      bubble.style.background = `linear-gradient(90deg, ${userColor}10, transparent)`;
+    }
+    
+    if (state.isSelectionMode && state.selectedMessages.has(docInstance.id)) {
+      bubble.classList.add("selected-message");
+    }
+    
+    bubble.addEventListener('click', (e) => {
+      if (state.isSelectionMode) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleMessageClick(bubble);
+      }
+    });
+
+    const kebabBtn = document.createElement("button");
+    kebabBtn.type = "button";
+    kebabBtn.className = "kebab-btn";
+    kebabBtn.setAttribute("aria-label", "Message options");
+    kebabBtn.appendChild(createKebabIcon());
+    kebabBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showDropdownMenu(e, bubble.dataset);
+    });
+
+    if (!isConsecutive) {
+      const headerElement = document.createElement("div");
+      headerElement.className = `flex items-center gap-1.5 mb-1 ${isMine ? "justify-end" : "justify-start"}`;
+      
+      const imgElement = document.createElement("img");
+      imgElement.src = photoURL;
+      imgElement.alt = "";
+      imgElement.className = `chat-pfp ${isMine ? "order-2" : "order-1"}`;
+      imgElement.loading = "lazy";
+      imgElement.draggable = false;
+      if (!isMine) imgElement.style.borderColor = userColor;
+      
+      imgElement.onerror = function() {
+        this.src = `https://placehold.co/32x32/000000/ffffff?text=${encodeURIComponent(firstChar)}`;
+      };
+      
+      const usernameElement = document.createElement("div");
+      usernameElement.className = `font-bold text-sm opacity-90 ${isMine ? "order-1 text-right" : "order-2 text-left"}`;
+      usernameElement.textContent = username;
+      if (!isMine) usernameElement.style.color = userColor;
+      
+      headerElement.appendChild(imgElement);
+      headerElement.appendChild(usernameElement);
+      bubble.appendChild(headerElement);
+    }
+
+    if (data.replyTo) {
+      const replyPreview = document.createElement("div");
+      replyPreview.className = "reply-preview";
+      
+      const replyAuthorEl = document.createElement("div");
+      replyAuthorEl.className = "reply-author";
+      replyAuthorEl.textContent = state.userProfiles[data.replyTo.userId]?.username || "Anonymous";
+      
+      if (!isMine) {
+        replyPreview.style.borderLeftColor = userColor;
+        replyAuthorEl.style.color = userColor;
+      }
+      
+      const replyTextEl = document.createElement("div");
+      replyTextEl.className = "reply-text";
+      replyTextEl.textContent = data.replyTo.text;
+      
+      replyPreview.appendChild(replyAuthorEl);
+      replyPreview.appendChild(replyTextEl);
+      
+      replyPreview.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const escapedId = escapeSelector(data.replyTo.messageId);
+        const originalBubble = document.querySelector(`.message-bubble[data-id="${escapedId}"]`);
+        if (originalBubble) {
+          originalBubble.scrollIntoView({ behavior: "smooth", block: "center" });
+          originalBubble.style.backgroundColor = "rgba(255, 255, 255, 0.1)";
+          setTimeout(() => {
+            originalBubble.style.backgroundColor = "";
+          }, 1000);
+        }
+      });
+      
+      bubble.appendChild(replyPreview);
+    }
+
+    const textElement = document.createElement("p");
+    textElement.className = "text-left";
+    
+    if (data.isPinned) {
+      const pinIcon = document.createElement("span");
+      pinIcon.className = "text-amber-400 mr-1";
+      pinIcon.setAttribute("aria-hidden", "true");
+      pinIcon.textContent = "📌";
+      textElement.appendChild(pinIcon);
+    }
+    
+    textElement.appendChild(document.createTextNode(text));
+    bubble.appendChild(textElement);
+
+    const footerDiv = document.createElement("div");
+    footerDiv.className = "bubble-footer";
+    footerDiv.style.justifyContent = isMine ? "flex-end" : "flex-start";
+    
+    const timeElement = document.createElement("span");
+    timeElement.className = "inner-timestamp";
+    timeElement.dataset.ts = data.timestamp ? String(data.timestamp.toMillis()) : String(Date.now());
+    
+    let timeText = formatMessageTime(messageDateObj);
+    if (data.edited) timeText += " (edited)";
+    timeElement.textContent = timeText;
+    
+    footerDiv.appendChild(timeElement);
+    bubble.appendChild(footerDiv);
+
+    const docReactions = data.reactions || {};
+    const chipsContainer = document.createElement("div");
+    chipsContainer.className = "reaction-chips-container";
+    let hasChips = false;
+    
+    Object.keys(REACTION_TYPES).forEach(rtype => {
+      const userIds = docReactions[rtype] || [];
+      if (userIds.length > 0) {
+        hasChips = true;
+        const chip = document.createElement("div");
+        chip.className = "reaction-chip";
+        
+        const hasReacted = userIds.includes(state.currentUserId);
+        if (hasReacted) chip.classList.add("user-reacted");
+        
+        const emojiSpan = document.createElement("span");
+        emojiSpan.textContent = REACTION_TYPES[rtype];
+        
+        const countSpan = document.createElement("span");
+        countSpan.textContent = ` ${userIds.length}`;
+        
+        chip.appendChild(emojiSpan);
+        chip.appendChild(countSpan);
+        
+        chip.onclick = (e) => {
+          e.stopPropagation();
+          toggleReaction(docInstance.id, type, rtype, hasReacted);
+        };
+        
+        chipsContainer.appendChild(chip);
+      }
+    });
+    
+    if (hasChips) {
+      bubble.appendChild(chipsContainer);
+      bubble.classList.add("has-reactions");
+    }
+
+    const replyBtn = document.createElement("button");
+    replyBtn.type = "button";
+    replyBtn.className = "side-action-btn";
+    replyBtn.setAttribute("aria-label", "Reply to message");
+    replyBtn.textContent = "↩";
+    replyBtn.onclick = (e) => {
+      e.stopPropagation();
+      startReplyMode(bubble.dataset);
+    };
+
+    const reactBtn = document.createElement("button");
+    reactBtn.type = "button";
+    reactBtn.className = "side-action-btn";
+    reactBtn.setAttribute("aria-label", "Add reaction");
+    reactBtn.textContent = "♡";
+
+    const picker = document.createElement("div");
+    picker.className = "reaction-picker hidden";
+    picker.setAttribute("role", "menu");
+    
+    Object.entries(REACTION_TYPES).forEach(([rtype, emoji]) => {
+      const opt = document.createElement("span");
+      opt.className = "reaction-option";
+      opt.setAttribute("role", "menuitem");
+      opt.textContent = emoji;
+      opt.onclick = (e) => {
+        e.stopPropagation();
+        const hasReacted = (docReactions[rtype] || []).includes(state.currentUserId);
+        toggleReaction(docInstance.id, type, rtype, hasReacted);
+        picker.classList.add("hidden");
+        picker.remove();
+      };
+      picker.appendChild(opt);
+    });
+
+    reactBtn.onclick = (e) => {
+      e.stopPropagation();
+      
+      document.querySelectorAll(".reaction-picker").forEach(p => {
+        p.classList.add("hidden");
+        p.remove();
+      });
+      
+      const rect = reactBtn.getBoundingClientRect();
+      picker.style.top = `${rect.top - 60}px`;
+      
+      if (window.innerWidth < 640) {
+        picker.style.left = "50%";
+        picker.style.transform = "translateX(-50%)";
+      } else {
+        picker.style.left = `${rect.left}px`;
+      }
+      
+      picker.classList.remove("hidden");
+      document.body.appendChild(picker);
+    };
+
+    const bubbleWrapper = document.createElement("div");
+    bubbleWrapper.className = `bubble-wrapper ${isMine ? "my-bubble-wrapper" : ""} ${isConsecutive ? "mt-0.5" : "mt-2"}`;
+    bubbleWrapper.appendChild(kebabBtn);
+    bubbleWrapper.appendChild(bubble);
+
+    if (isMine) {
+      row.appendChild(reactBtn);
+      row.appendChild(replyBtn);
+      row.appendChild(bubbleWrapper);
+    } else {
+      row.appendChild(bubbleWrapper);
+      row.appendChild(replyBtn);
+      row.appendChild(reactBtn);
+    }
+    
+    alignWrapper.appendChild(row);
+    feedContainer.appendChild(alignWrapper);
+  });
   
-  // PERFORMANCE: Incremental update for subsequent changes
-  if (snapshot) {
-    const changes = snapshot.docChanges();
-    
-    if (changes.length === 0) return;
-    
-    // Handle removals
-    const removedIds = new Set();
-    changes.forEach(change => {
-      if (change.type === 'removed') {
-        removedIds.add(change.doc.id);
-        messageCache.messages.delete(change.doc.id);
-      }
+  const scrollAnchor = document.createElement("div");
+  scrollAnchor.id = "scrollAnchor";
+  scrollAnchor.style.height = "1px";
+  scrollAnchor.style.width = "100%";
+  feedContainer.appendChild(scrollAnchor);
+  
+  if (state.bottomObserver) {
+    state.bottomObserver.disconnect();
+    state.bottomObserver.observe(scrollAnchor);
+  }
+
+  const hasNewMessages = snapshot && 
+    snapshot.docChanges().some(change => change.type === 'added');
+  
+  if (isFirstSnapshot && docs.length > 0) {
+    feedContainer.style.scrollBehavior = "auto";
+    scrollToBottom();
+    requestAnimationFrame(() => {
+      scrollToBottom();
+      feedContainer.style.scrollBehavior = "smooth";
     });
+  } else if (hasNewMessages) {
+    const lastDoc = docs[docs.length - 1];
+    const isOwnMessage = lastDoc && lastDoc.data().userId === state.currentUserId;
     
-    if (removedIds.size > 0) {
-      removedIds.forEach(id => {
-        const escapedId = escapeSelector(id);
-        const element = feedContainer.querySelector(`.message-bubble[data-id="${escapedId}"]`);
-        if (element) {
-          // Remove the entire align wrapper
-          const alignWrapper = element.closest('.flex.w-full');
-          if (alignWrapper) {
-            alignWrapper.remove();
-          }
-        }
-      });
+    if (isOwnMessage || wasAtBottom) {
+      scrollToBottom();
+    } else {
+      state.unreadMessages++;
+      updateScrollButton();
     }
-    
-    // Handle additions
-    const addedDocs = changes.filter(c => c.type === 'added').map(c => c.doc);
-    
-    if (addedDocs.length > 0) {
-      const fragment = document.createDocumentFragment();
-      let lastUserId = null;
-      let lastDateString = null;
-      
-      // Get last rendered message info
-      const lastBubble = feedContainer.querySelector('.message-bubble:last-of-type');
-      if (lastBubble) {
-        lastUserId = lastBubble.dataset.userId;
-        const ts = parseInt(lastBubble.dataset.timestamp, 10);
-        if (ts) {
-          lastDateString = new Date(ts).toDateString();
-        }
-      }
-      
-      addedDocs.forEach(docInstance => {
-        const result = createMessageElement(docInstance, type, lastUserId, lastDateString);
-        
-        if (!result.skipped && result.elements) {
-          result.elements.forEach(el => fragment.appendChild(el));
-          lastUserId = result.lastUserId;
-          lastDateString = result.lastDateString;
-          
-          messageCache.messages.set(result.docId, {
-            data: docInstance.data(),
-            timestamp: Date.now()
-          });
-        }
-      });
-      
-      // Insert before scroll anchor
-      const scrollAnchor = document.getElementById('scrollAnchor');
-      if (scrollAnchor) {
-        feedContainer.insertBefore(fragment, scrollAnchor);
-      } else {
-        feedContainer.appendChild(fragment);
-      }
-      
-      // Check if we should scroll
-      const lastDoc = addedDocs[addedDocs.length - 1];
-      const isOwnMessage = lastDoc && lastDoc.data().userId === state.currentUserId;
-      
-      if (isOwnMessage || wasAtBottom) {
-        requestAnimationFrame(() => {
-          feedContainer.scrollTop = feedContainer.scrollHeight;
-          state.userIsAtBottom = true;
-          state.unreadMessages = 0;
-          updateScrollButton();
-        });
-      } else {
-        state.unreadMessages += addedDocs.length;
-        updateScrollButton();
-      }
-    }
-    
-    // Handle modifications (reactions, edits, pins)
-    const modifiedDocs = changes.filter(c => c.type === 'modified');
-    
-    modifiedDocs.forEach(change => {
-      const docId = change.doc.id;
-      const data = change.doc.data();
-      const escapedId = escapeSelector(docId);
-      const existingBubble = feedContainer.querySelector(`.message-bubble[data-id="${escapedId}"]`);
-      
-      if (existingBubble) {
-        // Update text if edited
-        const textEl = existingBubble.querySelector('p.text-left');
-        if (textEl) {
-          // Preserve pin icon if present
-          const pinIcon = textEl.querySelector('.text-amber-400');
-          textEl.textContent = '';
-          
-          if (data.isPinned) {
-            const newPinIcon = document.createElement("span");
-            newPinIcon.className = "text-amber-400 mr-1";
-            newPinIcon.textContent = "📌";
-            textEl.appendChild(newPinIcon);
-          }
-          
-          textEl.appendChild(document.createTextNode(data.text || "..."));
-        }
-        
-        // Update timestamp if edited
-        const timeEl = existingBubble.querySelector('.inner-timestamp');
-        if (timeEl && data.edited) {
-          const ts = parseInt(timeEl.dataset.ts, 10);
-          if (ts) {
-            timeEl.textContent = formatMessageTime(new Date(ts)) + " (edited)";
-          }
-        }
-        
-        // Update reactions
-        const existingChips = existingBubble.querySelector('.reaction-chips-container');
-        if (existingChips) {
-          existingChips.remove();
-          existingBubble.classList.remove('has-reactions');
-        }
-        
-        const docReactions = data.reactions || {};
-        let hasChips = false;
-        const chipsContainer = document.createElement("div");
-        chipsContainer.className = "reaction-chips-container";
-        
-        Object.keys(REACTION_TYPES).forEach(rtype => {
-          const userIds = docReactions[rtype] || [];
-          if (userIds.length > 0) {
-            hasChips = true;
-            const chip = document.createElement("div");
-            chip.className = "reaction-chip";
-            
-            const hasReacted = userIds.includes(state.currentUserId);
-            if (hasReacted) chip.classList.add("user-reacted");
-            
-            const emojiSpan = document.createElement("span");
-            emojiSpan.textContent = REACTION_TYPES[rtype];
-            
-            const countSpan = document.createElement("span");
-            countSpan.textContent = ` ${userIds.length}`;
-            
-            chip.appendChild(emojiSpan);
-            chip.appendChild(countSpan);
-            
-            chip.onclick = (e) => {
-              e.stopPropagation();
-              toggleReaction(docId, type, rtype, hasReacted);
-            };
-            
-            chipsContainer.appendChild(chip);
-          }
-        });
-        
-        if (hasChips) {
-          existingBubble.appendChild(chipsContainer);
-          existingBubble.classList.add("has-reactions");
-        }
-        
-        // Update pin status
-        if (data.isPinned) {
-          existingBubble.classList.add("pinned");
-        } else {
-          existingBubble.classList.remove("pinned");
-        }
-        
-        existingBubble.dataset.isPinned = String(data.isPinned || false);
-        
-        // Update cache
-        messageCache.messages.set(docId, {
-          data: data,
-          timestamp: Date.now()
-        });
-      }
-    });
+  } else {
+    feedContainer.scrollTop = prevScrollTop;
   }
 }
 
@@ -3515,27 +3061,10 @@ async function postMessage(collectionRef, input) {
     return;
   }
   
+  // Check device ban before posting
   if (state.isDeviceBanned) {
     showToast("Your device has been banned.", "error");
     return;
-  }
-  
-  if (state.isBanned) {
-    showToast("You have been banned.", "error");
-    return;
-  }
-  
-  const spamCheck = checkSpamStatus();
-  
-  if (!spamCheck.allowed) {
-    if (spamCheck.shouldBan) {
-      await autoBanForSpam();
-      return;
-    }
-  }
-  
-  if (spamCheck.warning) {
-    showSpamWarning(spamCheck.warning);
   }
   
   if (state.db && state.currentUserId) {
@@ -3561,6 +3090,13 @@ async function postMessage(collectionRef, input) {
   const text = validation.text;
   
   if (!state.db) return;
+  
+  const now = Date.now();
+  if (now - rateLimitState.lastMessageTime < RATE_LIMIT_MS) {
+    const remainingTime = Math.ceil((RATE_LIMIT_MS - (now - rateLimitState.lastMessageTime)) / 1000);
+    showToast(`Please wait ${remainingTime} second${remainingTime > 1 ? 's' : ''} before sending another message.`, "error");
+    return;
+  }
   
   input.disabled = true;
   
@@ -3591,17 +3127,16 @@ async function postMessage(collectionRef, input) {
     
     await addDoc(collectionRef, messageData);
 
-    recordMessage();
-
     await setDoc(doc(state.db, "users", state.currentUserId), {
       lastMessageAt: serverTimestamp()
     }, { merge: true });
+
+    rateLimitState.lastMessageTime = Date.now();
     
     input.value = "";
     cancelReplyMode();
     updateTypingStatus(false);
-    
-    // PERFORMANCE: Scroll will happen automatically via the incremental render
+    scrollToBottom();
     
     const counter = input === chatInput ? chatCharCount : confessionCharCount;
     updateCharacterCounter(input, counter);
@@ -3609,7 +3144,8 @@ async function postMessage(collectionRef, input) {
   } catch (e) {
     console.error('Post error:', e);
     if (e.code === 'permission-denied') {
-      showToast("You don't have permission to post.", "error");
+      showToast("Please wait a moment before sending another message.", "error");
+      rateLimitState.lastMessageTime = Date.now();
     } else {
       showToast("Failed to send message. Please try again.", "error");
     }
@@ -3677,8 +3213,7 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// PERFORMANCE: Throttled timestamp updates
-const updateTimestamps = throttle(() => {
+setInterval(() => {
   document.querySelectorAll('.inner-timestamp').forEach(el => {
     const ts = parseInt(el.dataset.ts, 10);
     if (ts > 0) {
@@ -3687,8 +3222,6 @@ const updateTimestamps = throttle(() => {
     }
   });
 }, 60000);
-
-setInterval(updateTimestamps, 60000);
 
 scrollToBottomBtn?.addEventListener("click", scrollToBottom);
 
@@ -3821,8 +3354,6 @@ window.addEventListener("beforeunload", () => {
 
 window.addEventListener('unload', () => {
   cleanupAllListeners();
-  messageCache.messages.clear();
-  elementPool.clear();
 });
 
 // ============================================================
