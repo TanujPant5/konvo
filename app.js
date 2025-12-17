@@ -741,7 +741,6 @@ const firebaseConfig = {
   messagingSenderId: "81540120286",
   appId: "1:81540120286:web:9a01799acba41c35c48c4f"
 };
-
 const appStartTime = Date.now();
 
 // ============================================================
