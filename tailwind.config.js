@@ -8,12 +8,14 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Match your CSS custom properties
-        'konvo-bg': '#0a0a0a',
-        'konvo-surface': '#1c1c1c',
-        'konvo-border': '#333333',
-        'konvo-text': '#ededed',
-        'konvo-muted': '#888888',
+        // Nordic Slate Theme
+        'konvo-bg': '#1e293b',
+        'konvo-surface': '#334155',
+        'konvo-border': '#475569',
+        'konvo-text': '#e2e8f0',
+        'konvo-muted': '#94a3b8',
+        'konvo-accent': '#a78bfa', // A slightly more vibrant purple
+        'konvo-accent-vibrant': '#2dd4bf', // A new vibrant teal
       },
       fontFamily: {
         'inter': ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],

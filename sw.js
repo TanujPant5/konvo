@@ -2,8 +2,8 @@
 // Version: 2.0 (Security Hardened)
 'use strict';
 
-const CACHE_VERSION = 'v9';
-const CACHE_NAME = `konvo-cache-${CACHE_VERSION}`; // ✅ Backticks
+const CACHE_VERSION = 'v10';
+const CACHE_NAME = `konvo-cache-${CACHE_VERSION}`;
 
 // Files to cache (static assets only)
 const STATIC_ASSETS = [
@@ -81,7 +81,7 @@ self.addEventListener('install', (event) => {
         return Promise.allSettled(
           STATIC_ASSETS.map((url) =>
             cache.add(url).catch((err) => {
-              console.warn(`Failed to cache ${url}:`, err); // ✅ Backticks
+              console.warn(`Failed to cache ${url}:`, err);
             })
           )
         );
