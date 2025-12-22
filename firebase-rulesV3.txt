@@ -1,12 +1,11 @@
 rules_version = '2';
 
 service cloud.firestore {
-
   match /databases/{database}/documents {
 
     // ============================================================
     // KONVO - ANONYMOUS CHAT PLATFORM SECURITY RULES
-    // Version: 4.0 (Security Hardened - All Vulnerabilities Fixed)
+    // Version: 4.4 (No Rate Limit)
     // ============================================================
 
     // ============================
@@ -52,17 +51,14 @@ service cloud.firestore {
       return col in ['chat', 'confessions'];
     }
 
-    // FIXED: Added rate limiting check
+    // UPDATED: Rate limiter removed
     function canSendMessage() {
-      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
-      let lastMessage = userDoc.data.get('lastMessageAt', timestamp.date(1970, 1, 1));
+      let userDocRef = /databases/$(database)/documents/users/$(request.auth.uid);
       
       return isActiveUser()
-             && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-             && userDoc.data.username is string
-             && userDoc.data.username.size() >= 1
-             // Rate limit: 1 message per 2 seconds
-             && lastMessage + duration.value(2, 's') < request.time;
+             && exists(userDocRef)
+             && get(userDocRef).data.username is string
+             && get(userDocRef).data.username.size() >= 1;
     }
 
     function isValidUsername(username) {
@@ -70,12 +66,9 @@ service cloud.firestore {
              && username.size() >= 1
              && username.size() <= 30
              && username.matches('^[a-zA-Z0-9_\\- ]+$')
-             // Must contain at least one alphanumeric character
              && username.matches('.*[a-zA-Z0-9]+.*')
-             // Cannot start or end with space
              && !username.matches('^\\s.*')
              && !username.matches('.*\\s$')
-             // Reserved words - exact match
              && username.lower() != 'anonymous'
              && username.lower() != 'admin'
              && username.lower() != 'moderator'
@@ -89,7 +82,6 @@ service cloud.firestore {
              && username.lower() != 'owner'
              && username.lower() != 'bot'
              && username.lower() != 'help'
-             // Reserved words - contains
              && !username.lower().matches('.*anonymous.*')
              && !username.lower().matches('.*admin.*')
              && !username.lower().matches('.*moderator.*')
@@ -114,7 +106,6 @@ service cloud.firestore {
       let allowedFields = ['username', 'profilePhotoURL', 'lastMessageAt'];
       
       return data.keys().hasOnly(allowedFields)
-             // Username is REQUIRED
              && 'username' in data
              && isValidUsername(data.username)
              && (!('profilePhotoURL' in data) || isValidProfilePhotoURL(data.profilePhotoURL))
@@ -194,7 +185,6 @@ service cloud.firestore {
              && !(request.auth.uid in oldHiddenFor);
     }
 
-    // FIXED: Stricter reaction validation with proper other-user check
     function isValidReactionsUpdate() {
       let oldReactions = resource.data.get('reactions', {});
       let newReactions = request.resource.data.reactions;
@@ -216,7 +206,6 @@ service cloud.firestore {
              && (!('skull' in reactions) || (reactions.skull is list && reactions.skull.size() <= 500));
     }
 
-    // FIXED: Validate that only the current user's reaction changed
     function validateUserReactionChange(oldReactions, newReactions, uid, validTypes) {
       let thumbsupDiff = getReactionDiff(oldReactions, newReactions, 'thumbsup', uid);
       let laughDiff = getReactionDiff(oldReactions, newReactions, 'laugh', uid);
@@ -224,7 +213,6 @@ service cloud.firestore {
       let heartDiff = getReactionDiff(oldReactions, newReactions, 'heart', uid);
       let skullDiff = getReactionDiff(oldReactions, newReactions, 'skull', uid);
       
-      // Exactly one reaction type should change for current user
       let totalChanges = thumbsupDiff + laughDiff + surprisedDiff + heartDiff + skullDiff;
       return totalChanges == 1 || totalChanges == -1;
     }
@@ -238,7 +226,6 @@ service cloud.firestore {
       return (wasIn && !isIn) ? -1 : (!wasIn && isIn) ? 1 : 0;
     }
 
-    // FIXED: New function to verify other users' reactions weren't modified
     function validateOtherUsersUnchanged(oldReactions, newReactions, uid) {
       return validateSingleReactionOthersUnchanged(oldReactions, newReactions, 'thumbsup', uid)
              && validateSingleReactionOthersUnchanged(oldReactions, newReactions, 'laugh', uid)
@@ -253,7 +240,6 @@ service cloud.firestore {
       let oldWithoutUser = oldList.removeAll([uid]);
       let newWithoutUser = newList.removeAll([uid]);
       
-      // Verify other users' reactions are exactly the same
       return oldWithoutUser.size() == newWithoutUser.size()
              && oldWithoutUser.hasAll(newWithoutUser)
              && newWithoutUser.hasAll(oldWithoutUser);
@@ -315,7 +301,7 @@ service cloud.firestore {
     }
 
     // ============================
-    // 3. DEVICE BAN VALIDATION (FIXED)
+    // 3. DEVICE BAN VALIDATION
     // ============================
 
     function isValidDeviceBanRecord() {
@@ -337,11 +323,10 @@ service cloud.firestore {
              && (!('platform' in data) || data.platform == null || (data.platform is string && data.platform.size() <= 100));
     }
 
-    // FIXED: Made ipHash required
     function isValidIPBanRecord() {
       let data = request.resource.data;
       let requiredFields = ['bannedBy', 'timestamp', 'ipHash'];
-      let allAllowedFields = ['ipHash', 'ipAddress', 'userId', 'username', 'bannedBy', 'timestamp', 'reason'];
+      let allAllowedFields = ['ipHash', 'userId', 'username', 'bannedBy', 'timestamp', 'reason'];
       
       return data.keys().hasAll(requiredFields)
              && data.keys().hasOnly(allAllowedFields)
@@ -350,34 +335,25 @@ service cloud.firestore {
              && data.ipHash is string
              && data.ipHash.size() > 0
              && data.ipHash.size() <= 64
-             && (!('ipAddress' in data) || data.ipAddress == null || (data.ipAddress is string && data.ipAddress.size() <= 50))
              && (!('userId' in data) || (data.userId is string && data.userId.size() <= 128))
              && (!('username' in data) || (data.username is string && data.username.size() <= 30))
              && (!('reason' in data) || (data.reason is string && data.reason.size() <= 500));
     }
 
-    // FIXED: Self-ban validates username against actual profile
     function isValidSelfBanRecord() {
       let data = request.resource.data;
       let allowedFields = ['bannedBy', 'timestamp', 'reason', 'username'];
-      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
-      let actualUsername = userDoc.data.get('username', '');
       
       return data.keys().hasOnly(allowedFields)
              && data.bannedBy == "SYSTEM_AUTO_BAN"
              && data.timestamp == request.time
              && 'reason' in data
              && data.reason is string
-             && data.reason.matches('.*[Ss]pam.*')
-             // Username must match actual profile or not be provided
-             && (!('username' in data) || data.username == actualUsername);
+             && data.reason.matches('.*[Ss]pam.*');
     }
 
-    // FIXED: Document ID format is userId_fingerprint
     function isValidSelfDeviceBanRecord() {
       let data = request.resource.data;
-      let docId = request.resource.id;
-      let expectedDocId = request.auth.uid + '_' + data.fingerprint;
       let deviceDocId = request.auth.uid + '_' + data.fingerprint;
       
       return data.bannedBy == "SYSTEM_AUTO_BAN"
@@ -389,16 +365,20 @@ service cloud.firestore {
              && data.fingerprint is string
              && data.fingerprint.size() > 0
              && data.fingerprint.size() <= 100
-             // Verify this fingerprint is registered to this user
              && exists(/databases/$(database)/documents/user_devices/$(deviceDocId))
              && get(/databases/$(database)/documents/user_devices/$(deviceDocId)).data.userId == request.auth.uid;
     }
 
-    // Note: IP verification should be done via Cloud Functions for proper verification
-    function isValidSelfIPBanRecord() {
+    // ============================
+    // SECURE SELF IP BAN - VERIFIED AGAINST DEVICE RECORD
+    // ============================
+    
+    function isValidSelfIPBanRecord(ipHashDocId) {
       let data = request.resource.data;
+      let fingerprint = data.get('fingerprint', '');
+      let deviceDocId = request.auth.uid + '_' + fingerprint;
       
-      return data.bannedBy == "SYSTEM_AUTO_BAN"
+      let basicValid = data.bannedBy == "SYSTEM_AUTO_BAN"
              && data.timestamp == request.time
              && 'reason' in data
              && data.reason is string
@@ -407,10 +387,25 @@ service cloud.firestore {
              && 'ipHash' in data
              && data.ipHash is string
              && data.ipHash.size() > 0
-             && data.ipHash.size() <= 64;
+             && data.ipHash.size() <= 64
+             && 'fingerprint' in data
+             && fingerprint.size() > 0;
+      
+      let deviceExists = exists(/databases/$(database)/documents/user_devices/$(deviceDocId));
+      
+      let deviceData = deviceExists ? 
+                       get(/databases/$(database)/documents/user_devices/$(deviceDocId)).data : 
+                       null;
+      
+      let ipHashMatches = deviceData != null && 
+                          deviceData.userId == request.auth.uid &&
+                          deviceData.ipHash == data.ipHash;
+      
+      let docIdMatches = ipHashDocId == data.ipHash;
+      
+      return basicValid && deviceExists && ipHashMatches && docIdMatches;
     }
 
-    // FIXED: Document ID must be userId_fingerprint format
     function isValidDeviceRegistration() {
       let data = request.resource.data;
       let allowedFields = ['userId', 'fingerprint', 'ipAddress', 'ipHash', 'userAgent', 'language', 'timezone', 'screenResolution', 'platform', 'firstSeen', 'lastSeen'];
@@ -421,26 +416,27 @@ service cloud.firestore {
              && data.fingerprint is string
              && data.fingerprint.size() > 0
              && data.fingerprint.size() <= 100
-             // Document ID must be userId_fingerprint for proper ownership
              && request.resource.id == expectedDocId
              && (!('ipAddress' in data) || data.ipAddress == null || (data.ipAddress is string && data.ipAddress.size() <= 50))
              && (!('ipHash' in data) || data.ipHash == null || (data.ipHash is string && data.ipHash.size() <= 64))
-             && (!('userAgent' in data) || (data.userAgent is string && data.userAgent.size() <= 500))
-             && (!('language' in data) || (data.language is string && data.language.size() <= 20))
+             && (!('userAgent' in data) || data.userAgent == null || (data.userAgent is string && data.userAgent.size() <= 500))
+             && (!('language' in data) || data.language == null || (data.language is string && data.language.size() <= 20))
              && (!('timezone' in data) || data.timezone == null || (data.timezone is string && data.timezone.size() <= 100))
-             && (!('screenResolution' in data) || (data.screenResolution is string && data.screenResolution.size() <= 20))
-             && (!('platform' in data) || (data.platform is string && data.platform.size() <= 50));
+             && (!('screenResolution' in data) || data.screenResolution == null || (data.screenResolution is string && data.screenResolution.size() <= 20))
+             && (!('platform' in data) || data.platform == null || (data.platform is string && data.platform.size() <= 50));
     }
 
     function isValidDeviceUpdate() {
       let data = request.resource.data;
       let oldData = resource.data;
+      let changedFields = data.diff(oldData).affectedKeys();
+      let allowedUpdateFields = ['lastSeen', 'ipAddress', 'ipHash', 'userAgent'];
       
       return data.userId == request.auth.uid
              && oldData.userId == request.auth.uid
              && data.fingerprint == oldData.fingerprint
-             // Ensure document ID matches expected format
-             && request.resource.id == (request.auth.uid + '_' + data.fingerprint);
+             && request.resource.id == (request.auth.uid + '_' + data.fingerprint)
+             && changedFields.hasOnly(allowedUpdateFields);
     }
 
     // ============================
@@ -467,7 +463,6 @@ service cloud.firestore {
                       isAdmin()
                       && isValidAdminUserUpdate()
                     ) || (
-                      // Self-ban for spam
                       isSignedIn()
                       && request.auth.uid == userId
                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['banned'])
@@ -506,15 +501,13 @@ service cloud.firestore {
     }
 
     // ============================
-    // 7. BANNED DEVICES (/banned_devices) - FIXED
+    // 7. BANNED DEVICES (/banned_devices)
     // ============================
 
     match /banned_devices/{fingerprintId} {
-      // Restrict read access - only admin or device owner can read
       allow read: if isAdmin() ||
                   (isSignedIn() && 
-                   exists(/databases/$(database)/documents/user_devices/$(request.auth.uid + '_' + fingerprintId)) &&
-                   get(/databases/$(database)/documents/user_devices/$(request.auth.uid + '_' + fingerprintId)).data.userId == request.auth.uid);
+                   exists(/databases/$(database)/documents/user_devices/$(request.auth.uid + '_' + fingerprintId)));
 
       allow create: if (isAdmin() && isValidDeviceBanRecord()) ||
                     (isSignedIn() && isValidSelfDeviceBanRecord());
@@ -525,15 +518,17 @@ service cloud.firestore {
     }
 
     // ============================
-    // 8. BANNED IPS (/banned_ips) - FIXED
+    // 8. BANNED IPS (/banned_ips)
     // ============================
 
-    match /banned_ips/{ipId} {
-      // Only admins can read/write IP bans
-      // Client-side IP ban checking should use Cloud Functions
-      allow read: if isAdmin();
+    match /banned_ips/{ipHashId} {
+      allow read: if isAdmin() ||
+                  (isSignedIn() && 
+                   ipHashId.size() > 0 &&
+                   ipHashId.size() <= 64);
 
-      allow create: if isAdmin() && isValidIPBanRecord();
+      allow create: if (isAdmin() && isValidIPBanRecord()) ||
+                    (isSignedIn() && isValidSelfIPBanRecord(ipHashId));
 
       allow update: if isAdmin();
 
@@ -541,19 +536,20 @@ service cloud.firestore {
     }
 
     // ============================
-    // 9. USER DEVICES (/user_devices) - FIXED
+    // 9. USER DEVICES (/user_devices)
     // ============================
 
     match /user_devices/{deviceDocId} {
       allow read: if isAdmin() ||
-                  (isSignedIn() && resource.data.userId == request.auth.uid);
+                  (isSignedIn() && deviceDocId.matches('^' + request.auth.uid + '_.*'));
 
-      // FIXED: Verify document ID starts with user's UID
-      allow create: if isActiveUser() 
+      allow create: if isSignedIn() 
+                    && !isBanned()
                     && isValidDeviceRegistration()
                     && deviceDocId.matches('^' + request.auth.uid + '_.*');
 
-      allow update: if isActiveUser() 
+      allow update: if isSignedIn()
+                    && !isBanned()
                     && isValidDeviceUpdate()
                     && deviceDocId.matches('^' + request.auth.uid + '_.*');
 
@@ -575,18 +571,17 @@ service cloud.firestore {
     }
 
     // ============================
-    // 11. ADMIN LIST (/admins) - LOCKED
+    // 11. ADMIN LIST (/admins)
     // ============================
 
-    match /admins/{docId} {
-      allow read: if isAdmin();
+    match /admins/{oduserId} {
+      allow read: if isSignedIn() && request.auth.uid == oduserId;
 
-      // Admin list can only be modified through Firebase Console or Admin SDK
       allow write: if false;
     }
 
     // ============================
-    // 12. CHAT & CONFESSIONS (/chat, /confessions) - FIXED
+    // 12. CHAT & CONFESSIONS (/chat, /confessions)
     // ============================
 
     match /{collection}/{docId} {
@@ -599,20 +594,17 @@ service cloud.firestore {
       allow update: if isValidCollection(collection)
                     && !isBanned()
                     && (
-                      // Admin can pin/unpin messages
                       (
                         isAdmin()
                         && isValidAdminMessageUpdate()
                       )
                       ||
-                      // User can edit their own message within 15 minutes
                       (
                         isActiveUser()
                         && resource.data.userId == request.auth.uid
                         && isValidMessageEdit()
                       )
                       ||
-                      // Users can add/remove their own reactions
                       (
                         isActiveUser()
                         && request.resource.data.diff(resource.data)
@@ -621,7 +613,6 @@ service cloud.firestore {
                         && isValidReactionsUpdate()
                       )
                       ||
-                      // Users can hide messages for themselves
                       (
                         isActiveUser()
                         && request.resource.data.diff(resource.data)
@@ -644,8 +635,6 @@ service cloud.firestore {
     // 13. CATCH-ALL DENY
     // ============================
     
-    // This rule ensures any collection not explicitly defined above is denied
-    // Note: Firestore rules use OR logic, so this doesn't override rules above
     match /{document=**} {
       allow read, write: if false;
     }
