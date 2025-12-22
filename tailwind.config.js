@@ -25,7 +25,7 @@ module.exports = {
         'svh': '100svh',
       },
       width: {
-        'konvo-logo': '7.5rem',
+        'konvo-logo': '5.5rem',
       },
     },
   },
