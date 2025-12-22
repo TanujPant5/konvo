@@ -24,9 +24,6 @@ module.exports = {
         'dvh': '100dvh',
         'svh': '100svh',
       },
-      width: {
-        'konvo-logo': '5.5rem',
-      },
     },
   },
   plugins: [],
