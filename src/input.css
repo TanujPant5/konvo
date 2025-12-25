@@ -333,17 +333,19 @@ a:focus-visible {
 }
 
 /* ============================
-   8. FEED CONTAINER
+   8. FEED CONTAINER (FIXED)
    ============================ */
 
 #feedContainer {
   background-color: transparent;
   overflow-y: auto;
-  overflow-x: hidden; /* prevent sideways scroll when a row overflows */
+  overflow-x: hidden;
   scroll-behavior: smooth;
-  padding-bottom: 20px;
+  padding-bottom: 4px; /* Changed from 8px */
   overflow-anchor: none;
   contain: layout style;
+  flex: 1;
+  min-height: 0;
 }
 
 /* ============================
@@ -1082,16 +1084,21 @@ body.selection-mode .message-bubble {
 }
 
 /* ============================
-   26. INPUT FORMS
+   26. INPUT FORMS (FIXED)
    ============================ */
 
 #chatForm,
 #confessionForm {
   padding: 12px;
-  /* Prevent the bottom input bar from colliding with iOS home indicator / safe area in PWA */
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
-  background-color: rgba(10, 10, 10, 0.95);
+  background-color: rgba(10, 10, 10, 0.98); /* Slightly more opaque */
   border-top: 1px solid var(--border-color);
+  /* Add these for better positioning */
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
 }
 
 #chatInput,
