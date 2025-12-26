@@ -1,16 +1,30 @@
 'use strict';
 
 // ═══════════════════════════════════════════════════════════════════
-// DISABLE CONSOLE LOGS IN PRODUCTION
+// DISABLE ALL CONSOLE OUTPUT IN PRODUCTION
 // ═══════════════════════════════════════════════════════════════════
 
-if (location.hostname !== 'localhost') {
+(function() {
   console.log = () => {};
   console.warn = () => {};
   console.error = () => {};
   console.info = () => {};
   console.debug = () => {};
-}
+  console.trace = () => {};
+  console.dir = () => {};
+  console.dirxml = () => {};
+  console.table = () => {};
+  console.group = () => {};
+  console.groupEnd = () => {};
+  console.groupCollapsed = () => {};
+  console.time = () => {};
+  console.timeEnd = () => {};
+  console.timeLog = () => {};
+  console.assert = () => {};
+  console.count = () => {};
+  console.countReset = () => {};
+  console.clear = () => {};
+})();
 
 // ═══════════════════════════════════════════════════════════════════
 // MOBILE VIEWPORT HANDLING (KEYBOARD FIX)
