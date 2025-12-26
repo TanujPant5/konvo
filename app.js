@@ -5,25 +5,13 @@
 // ═══════════════════════════════════════════════════════════════════
 
 (function() {
-  console.log = () => {};
-  console.warn = () => {};
-  console.error = () => {};
-  console.info = () => {};
-  console.debug = () => {};
-  console.trace = () => {};
-  console.dir = () => {};
-  console.dirxml = () => {};
-  console.table = () => {};
-  console.group = () => {};
-  console.groupEnd = () => {};
-  console.groupCollapsed = () => {};
-  console.time = () => {};
-  console.timeEnd = () => {};
-  console.timeLog = () => {};
-  console.assert = () => {};
-  console.count = () => {};
-  console.countReset = () => {};
-  console.clear = () => {};
+  const noop = () => {};
+  const methods = [
+    'log', 'warn', 'error', 'info', 'debug', 'trace', 'dir', 
+    'dirxml', 'table', 'group', 'groupEnd', 'groupCollapsed',
+    'time', 'timeEnd', 'timeLog', 'assert', 'count', 'countReset', 'clear'
+  ];
+  methods.forEach(method => { console[method] = noop; });
 })();
 
 // ═══════════════════════════════════════════════════════════════════
@@ -42,7 +30,6 @@
       const height = viewport?.height || window.innerHeight;
       const offsetTop = viewport?.offsetTop || 0;
       
-      // Set CSS custom property for dynamic height
       document.documentElement.style.setProperty('--app-height', `${height}px`);
       document.documentElement.style.setProperty('--viewport-offset', `${offsetTop}px`);
       
@@ -51,8 +38,7 @@
         document.body.style.maxHeight = `${height}px`;
       }
       
-      // Scroll feed to bottom if user was already at bottom (keyboard opened)
-      if (typeof state !== 'undefined' && state?.userIsAtBottom && feedContainer) {
+      if (typeof state !== 'undefined' && state?.userIsAtBottom && typeof feedContainer !== 'undefined' && feedContainer) {
         feedContainer.scrollTop = feedContainer.scrollHeight;
       }
       
@@ -60,17 +46,14 @@
     });
   };
   
-  // Apply immediately
   apply();
   
-  // Debounced resize handler
   let resizeTimeout;
   const debouncedApply = () => {
     clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(apply, 50);
   };
   
-  // Listen for all viewport changes
   window.addEventListener('resize', debouncedApply, { passive: true });
   
   if (window.visualViewport) {
@@ -78,7 +61,6 @@
     window.visualViewport.addEventListener('scroll', apply, { passive: true });
   }
   
-  // Handle orientation change
   window.addEventListener('orientationchange', () => {
     setTimeout(apply, 100);
   }, { passive: true });
@@ -110,7 +92,56 @@ import {
   writeBatch,
   arrayUnion,
   arrayRemove,
+  increment,
 } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
+
+// ═══════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════
+
+const REACTION_TYPES = Object.freeze({
+  thumbsup: "👍",
+  laugh: "😂",
+  surprised: "😮",
+  heart: "❤️",
+  skull: "💀"
+});
+
+const USER_COLORS = Object.freeze([
+  "#ff79c6", "#8be9fd", "#50fa7b", "#bd93f9", "#ffb86c",
+  "#f1fa8c", "#ff5555", "#00e5ff", "#fab1a0", "#a29bfe",
+  "#55efc4", "#fdcb6e", "#e17055", "#d63031", "#e84393",
+  "#0984e3", "#00b894"
+]);
+
+const MESSAGE_MAX_LENGTH = 500;
+const USERNAME_MAX_LENGTH = 30;
+const TYPING_TIMEOUT = 3000;
+const TYPING_STALE_THRESHOLD = 5000;
+const FINGERPRINT_STORAGE_KEY = 'konvo_device_fp';
+
+const SPAM_CONFIG = Object.freeze({
+  MAX_MESSAGES: 10,
+  TIME_WINDOW: 20000,
+  WARNING_THRESHOLD: 7,
+  CLEANUP_INTERVAL: 30000,
+  MIN_MESSAGE_INTERVAL: 2000,
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// FIREBASE CONFIGURATION
+// ═══════════════════════════════════════════════════════════════════
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDOiYfkCf3Y1Fq7625HimKsm3wYwjBWoxc",
+  authDomain: "konvo-d357d.firebaseapp.com",
+  projectId: "konvo-d357d",
+  storageBucket: "konvo-d357d.firebasestorage.app",
+  messagingSenderId: "924631278394",
+  appId: "1:924631278394:web:84b8642b5366d869926603"
+};
+
+const appStartTime = Date.now();
 
 // ═══════════════════════════════════════════════════════════════════
 // DEVICE STATE
@@ -124,708 +155,68 @@ const deviceState = {
 };
 
 // ═══════════════════════════════════════════════════════════════════
-// UTILITY FUNCTIONS
+// SPAM TRACKING
 // ═══════════════════════════════════════════════════════════════════
 
-function withTimeout(promise, ms, fallbackValue = null) {
-  return Promise.race([
-    promise,
-    new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms))
-  ]);
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// FINGERPRINT GENERATION WITH LOCALSTORAGE PERSISTENCE
-// ═══════════════════════════════════════════════════════════════════
-
-const FINGERPRINT_STORAGE_KEY = 'konvo_device_fp';
-
-async function generateDeviceFingerprint() {
-  // Check if we already have a saved fingerprint
-  try {
-    const savedFingerprint = localStorage.getItem(FINGERPRINT_STORAGE_KEY);
-    
-    if (savedFingerprint && savedFingerprint.length > 0) {
-      console.log('Using saved fingerprint from localStorage');
-      deviceState.fingerprint = savedFingerprint;
-      return savedFingerprint;
-    }
-  } catch (e) {
-    console.warn('LocalStorage not available:', e);
-  }
-
-  // No saved fingerprint, try FingerprintJS
-  try {
-    if (typeof FingerprintJS === 'undefined') {
-      console.warn('FingerprintJS not loaded, using fallback');
-      return createAndSaveStableFallback();
-    }
-
-    const fp = await withTimeout(FingerprintJS.load(), 5000, null);
-    if (!fp) {
-      console.warn('FingerprintJS.load() timed out, using fallback');
-      return createAndSaveStableFallback();
-    }
-
-    const result = await withTimeout(fp.get(), 5000, null);
-    if (!result) {
-      console.warn('FingerprintJS.get() timed out, using fallback');
-      return createAndSaveStableFallback();
-    }
-
-    // Got fingerprint from FingerprintJS, SAVE IT!
-    const fingerprint = result.visitorId;
-    saveFingerprint(fingerprint);
-    deviceState.fingerprint = fingerprint;
-    console.log('Device fingerprint generated and saved');
-    return fingerprint;
-
-  } catch (error) {
-    console.error('Fingerprint generation error:', error);
-    return createAndSaveStableFallback();
-  }
-}
-
-function createAndSaveStableFallback() {
-  // Check localStorage again (in case called directly)
-  try {
-    const savedFingerprint = localStorage.getItem(FINGERPRINT_STORAGE_KEY);
-    if (savedFingerprint && savedFingerprint.length > 0) {
-      deviceState.fingerprint = savedFingerprint;
-      return savedFingerprint;
-    }
-  } catch (e) {
-    // Continue to generate new one
-  }
-
-  // Create a stable fingerprint from device info
-  const components = [
-    navigator.userAgent,
-    navigator.language,
-    screen.width + 'x' + screen.height,
-    screen.colorDepth,
-    new Date().getTimezoneOffset(),
-    navigator.hardwareConcurrency || 'unknown',
-    navigator.deviceMemory || 'unknown',
-    navigator.platform,
-  ];
-
-  // Create a hash from components
-  let hash = 0;
-  const str = components.join('|||');
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-
-  // Generate unique ID with random part (generated ONCE, saved forever)
-  const randomPart = generateRandomString(8);
-  const fallbackId = 'fb_' + Math.abs(hash).toString(36) + '_' + randomPart;
-
-  // Save to localStorage
-  saveFingerprint(fallbackId);
-  deviceState.fingerprint = fallbackId;
-  
-  console.log('Fallback fingerprint created and saved');
-  return fallbackId;
-}
-
-function generateRandomString(length) {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
-  
-  // Try crypto.getRandomValues first (more secure)
-  try {
-    const array = new Uint8Array(length);
-    crypto.getRandomValues(array);
-    for (let i = 0; i < length; i++) {
-      result += chars[array[i] % chars.length];
-    }
-    return result;
-  } catch (e) {
-    // Fallback to Math.random
-    for (let i = 0; i < length; i++) {
-      result += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return result;
-  }
-}
-
-function saveFingerprint(fingerprint) {
-  try {
-    localStorage.setItem(FINGERPRINT_STORAGE_KEY, fingerprint);
-  } catch (e) {
-    console.warn('Could not save fingerprint to localStorage:', e);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// IP ADDRESS DETECTION
-// ═══════════════════════════════════════════════════════════════════
-
-async function getUserIPAddress() {
-  const ipServices = [
-    'https://api.ipify.org?format=json',
-    'https://ipapi.co/json/'
-  ];
-
-  try {
-    const fetchPromises = ipServices.map(async (service) => {
-      const response = await fetch(service, { mode: 'cors' });
-      if (!response.ok) throw new Error('Failed');
-      const data = await response.json();
-      if (data.ip && isValidIP(data.ip)) {
-        return data.ip;
-      }
-      throw new Error('Invalid IP');
-    });
-
-    const result = await withTimeout(
-      Promise.any(fetchPromises),
-      3000,  
-      null
-    );
-
-    if (result) {
-      deviceState.ipAddress = result;
-      console.log('IP address retrieved');
-      return result;
-    }
-  } catch (error) {
-    console.warn('IP detection failed:', error.message);
-  }
-
-  console.warn('Could not retrieve IP address');
-  return null;
-}
-
-function isValidIP(ip) {
-  if (!ip || typeof ip !== 'string') return false;
-  const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
-  const ipv6Pattern = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^([0-9a-fA-F]{1,4}:)*:([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4}$|^::$/;
-
-  if (ipv4Pattern.test(ip)) {
-    const parts = ip.split('.').map(Number);
-    return parts.every(part => part >= 0 && part <= 255);
-  }
-
-  return ipv6Pattern.test(ip);
-}
-
-function hashIP(ip) {
-  if (!ip) return '';
-  let hash = 0;
-  for (let i = 0; i < ip.length; i++) {
-    const char = ip.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return 'ip_' + Math.abs(hash).toString(36);
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// DEVICE IDENTIFICATION
-// ═══════════════════════════════════════════════════════════════════
-
-async function initializeDeviceIdentification() {
-  try {
-    const result = await withTimeout(
-      Promise.all([
-        generateDeviceFingerprint(),
-        getUserIPAddress()
-      ]),
-      8000,
-      null  
-    );
-
-    if (!result) {
-      console.warn('Device identification timed out, using fallback');
-      return {
-        fingerprint: createAndSaveStableFallback(),
-        ipAddress: null,
-        ipHash: null,
-        userAgent: navigator.userAgent,
-        language: navigator.language,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        screenResolution: `${screen.width}x${screen.height}`,
-        platform: navigator.platform,
-      };
-    }
-
-    const [fingerprint, ipAddress] = result;
-
-    deviceState.fingerprint = fingerprint;
-    deviceState.ipAddress = ipAddress;
-    deviceState.isIdentified = true;
-
-    return {
-      fingerprint,
-      ipAddress,
-      ipHash: hashIP(ipAddress),
-      userAgent: navigator.userAgent,
-      language: navigator.language,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      screenResolution: `${screen.width}x${screen.height}`,
-      platform: navigator.platform,
-    };
-
-  } catch (error) {
-    console.error('Device identification error:', error);
-    return {
-      fingerprint: createAndSaveStableFallback(),
-      ipAddress: null,
-      ipHash: null,
-      userAgent: navigator.userAgent,
-      language: navigator.language,
-      timezone: null,
-      screenResolution: `${screen.width}x${screen.height}`,
-      platform: navigator.platform,
-    };
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// BAN CHECKING FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════
-
-async function checkDeviceBan(db, deviceInfo) {
-  if (!db || !deviceInfo) {
-    return { isBanned: false, reason: null };
-  }
-
-  try {
-    if (deviceInfo.fingerprint) {
-      const fingerprintBanRef = doc(db, "banned_devices", deviceInfo.fingerprint);
-      const fingerprintBanSnap = await getDoc(fingerprintBanRef);
-
-      if (fingerprintBanSnap.exists()) {
-        const banData = fingerprintBanSnap.data();
-        return { 
-          isBanned: true, 
-          reason: 'Device banned',
-          bannedAt: banData.timestamp,
-          banType: 'fingerprint'
-        };
-      }
-    }
-
-    if (deviceInfo.ipAddress) {
-      const ipHash = hashIP(deviceInfo.ipAddress);
-      const ipBanRef = doc(db, "banned_ips", ipHash);
-      const ipBanSnap = await getDoc(ipBanRef);
-
-      if (ipBanSnap.exists()) {
-        const banData = ipBanSnap.data();
-        return { 
-          isBanned: true, 
-          reason: 'IP address banned',
-          bannedAt: banData.timestamp,
-          banType: 'ip'
-        };
-      }
-
-      const rawIpBanRef = doc(db, "banned_ips", deviceInfo.ipAddress.replace(/\./g, '_'));
-      const rawIpBanSnap = await getDoc(rawIpBanRef);
-
-      if (rawIpBanSnap.exists()) {
-        return { 
-          isBanned: true, 
-          reason: 'IP address banned',
-          banType: 'ip'
-        };
-      }
-    }
-
-    return { isBanned: false, reason: null };
-
-  } catch (error) {
-    console.error('Ban check error:', error);
-    return { isBanned: false, reason: null, error: error.message };
-  }
-}
-
-async function isMyDeviceBanned(db, userId, fingerprint) {
-  if (!db || !userId || !fingerprint) return false;
-
-  try {
-    const deviceDocId = `${userId}_${fingerprint}`;
-    const deviceRef = doc(db, "user_devices", deviceDocId);
-    const deviceSnap = await getDoc(deviceRef);
-
-    if (!deviceSnap.exists()) return false;
-
-    const banRef = doc(db, "banned_devices", fingerprint);
-    const banSnap = await getDoc(banRef);
-
-    return banSnap.exists();
-  } catch (error) {
-    console.error('Device ban check error:', error);
-    return false;
-  }
-}
-
-async function registerDevice(db, userId, deviceInfo) {
-  if (!db || !userId || !deviceInfo?.fingerprint) return;
-
-  try {
-    const deviceDocId = `${userId}_${deviceInfo.fingerprint}`;
-    const deviceRef = doc(db, "user_devices", deviceDocId);
-    const deviceSnap = await getDoc(deviceRef);
-
-    if (deviceSnap.exists()) {
-      await updateDoc(deviceRef, {
-        lastSeen: serverTimestamp(),
-        ipAddress: deviceInfo.ipAddress || null,
-        ipHash: deviceInfo.ipHash || null,
-        userAgent: deviceInfo.userAgent || null,
-      });
-    } else {
-      await setDoc(deviceRef, {
-        userId: userId,
-        fingerprint: deviceInfo.fingerprint,
-        ipAddress: deviceInfo.ipAddress || null,
-        ipHash: deviceInfo.ipHash || null,
-        userAgent: deviceInfo.userAgent || null,
-        language: deviceInfo.language || null,
-        timezone: deviceInfo.timezone || null,
-        screenResolution: deviceInfo.screenResolution || null,
-        platform: deviceInfo.platform || null,
-        firstSeen: serverTimestamp(),
-        lastSeen: serverTimestamp(),
-      });
-    }
-
-    console.log('Device registered');
-  } catch (error) {
-    console.error('Device registration error:', error);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// UI HELPER FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════
-
-function hideBanCheckOverlay() {
-  const overlay = document.getElementById('banCheckOverlay');
-  if (overlay) {
-    overlay.classList.add('hidden');
-    setTimeout(() => {
-      overlay.style.display = 'none';
-    }, 300);
-  }
-}
-
-async function checkFullUnbanStatus() {
-  if (!state.db || !state.deviceInfo) return;
-
-  try {
-    let stillBanned = false;
-
-    if (state.currentUserId) {
-      const userBanRef = doc(state.db, "banned_users", state.currentUserId);
-      const userBanSnap = await getDoc(userBanRef);
-      if (userBanSnap.exists()) stillBanned = true;
-    }
-
-    if (!stillBanned && state.deviceInfo.fingerprint) {
-      const fpBanRef = doc(state.db, "banned_devices", state.deviceInfo.fingerprint);
-      const fpBanSnap = await getDoc(fpBanRef);
-      if (fpBanSnap.exists()) stillBanned = true;
-    }
-
-    if (!stillBanned && state.deviceInfo.ipHash) {
-      const ipBanRef = doc(state.db, "banned_ips", state.deviceInfo.ipHash);
-      const ipBanSnap = await getDoc(ipBanRef);
-      if (ipBanSnap.exists()) stillBanned = true;
-    }
-
-    if (!stillBanned && state.deviceInfo.ipAddress) {
-      const rawIpKey = state.deviceInfo.ipAddress.replace(/\./g, '_');
-      const rawIpBanRef = doc(state.db, "banned_ips", rawIpKey);
-      const rawIpBanSnap = await getDoc(rawIpBanRef);
-      if (rawIpBanSnap.exists()) stillBanned = true;
-    }
-
-    if (!stillBanned) {
-      state.isBanned = false;
-      state.isDeviceBanned = false;
-      showUnbannedScreen();
-    }
-  } catch (error) {
-    console.error("Error checking unban status:", error);
-  }
-}
-
-function showDeviceBannedScreen(reason = 'Device banned') {
-  const appContainer = document.getElementById('app') || document.body;
-
-  Array.from(appContainer.children).forEach(child => {
-    if (child.id !== 'banOverlayScreen') {
-      child.style.display = 'none';
-    }
-  });
-
-  const existingOverlay = document.getElementById('banOverlayScreen');
-  if (existingOverlay) existingOverlay.remove();
-
-  const existingCheck = document.getElementById('banCheckOverlay');
-  if (existingCheck) existingCheck.style.display = 'none';
-
-  const overlay = document.createElement('div');
-  overlay.id = 'banOverlayScreen';
-  overlay.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background-color: #0a0a0a;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 99999;
-    gap: 0.5rem;
-    padding: 1rem;
-  `;
-
-  const h1 = document.createElement('h1');
-  h1.style.cssText = 'font-size: 1.875rem; color: #ef4444; font-weight: bold;';
-  h1.textContent = '🚫 ACCESS DENIED';
-
-  const p1 = document.createElement('p');
-  p1.style.cssText = 'color: #888; font-size: 0.875rem;';
-  p1.textContent = 'This device has been banned from Konvo.';
-
-  const p2 = document.createElement('p');
-  p2.style.cssText = 'color: #666; font-size: 0.75rem;';
-  p2.textContent = 'Reason: ' + sanitizeText(reason);
-
-  const p3 = document.createElement('p');
-  p3.style.cssText = 'color: #555; font-size: 0.75rem; margin-top: 1rem;';
-  p3.textContent = 'If you believe this is a mistake, please wait for admin review.';
-
-  overlay.appendChild(h1);
-  overlay.appendChild(p1);
-  overlay.appendChild(p2);
-  overlay.appendChild(p3);
-  document.body.appendChild(overlay);
-  document.body.classList.add('device-banned');
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// TEXT SANITIZATION & VALIDATION
-// ═══════════════════════════════════════════════════════════════════
-
-function sanitizeText(text) {
-  if (typeof text !== 'string') return '';
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;')
-    .replace(/\r?\n/g, ' ')
-    .replace(/`/g, '&#x60;');
-}
-
-function isValidUsername(username) {
-  if (typeof username !== 'string') return false;
-  const trimmed = username.trim();
-
-  if (trimmed.length === 0 || trimmed.length > 30) return false;
-
-  const reserved = ['anonymous', 'admin', 'moderator', 'system', 'konvo', 'mod'];
-  const lowerUsername = trimmed.toLowerCase();
-  if (reserved.some(r => lowerUsername === r || lowerUsername.includes(r))) {
-    return false;
-  }
-
-  const usernameRegex = /^[A-Za-z0-9_\- ]+$/;
-  return usernameRegex.test(trimmed);
-}
-
-function isValidMessageText(text) {
-  if (typeof text !== 'string') return false;
-  const trimmed = text.trim();
-
-  if (trimmed.length === 0 || trimmed.length > MESSAGE_MAX_LENGTH) return false;
-
-  const controlCharRegex = /[\x00-\x08\x0B\x0C\x0E-\x1F]/;
-  return !controlCharRegex.test(trimmed);
-}
-
-function isValidProfilePhotoURL(url) {
-  if (typeof url !== 'string') return false;
-  if (url.length > 500) return false;
-
-  const allowedPatterns = [
-    /^https:\/\/placehold\.co\/.+$/,
-    /^https:\/\/ui-avatars\.com\/.+$/,
-    /^https:\/\/api\.dicebear\.com\/.+$/,
-  ];
-
-  return allowedPatterns.some(pattern => pattern.test(url));
-}
-
-function validateMessageBeforePost(text) {
-  if (typeof text !== 'string') {
-    return { valid: false, error: "Invalid message format" };
-  }
-
-  const trimmed = text.trim();
-
-  if (trimmed.length === 0) {
-    return { valid: false, error: "Message cannot be empty" };
-  }
-
-  if (trimmed.length > MESSAGE_MAX_LENGTH) {
-    return { valid: false, error: `Message too long (max ${MESSAGE_MAX_LENGTH} characters)` };
-  }
-
-  const controlCharRegex = /[\x00-\x08\x0B\x0C\x0E-\x1F]/;
-  if (controlCharRegex.test(trimmed)) {
-    return { valid: false, error: "Message contains invalid characters" };
-  }
-
-  return { valid: true, text: trimmed };
-}
-
-function setTextSafely(element, text) {
-  if (element && element instanceof HTMLElement) {
-    element.textContent = text || '';
-  }
-}
-
-function createSafeTextNode(text) {
-  return document.createTextNode(text || '');
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// UTILITY FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════
-
-function debounce(func, wait) {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
-  };
-}
-
-function throttle(func, limit) {
-  let inThrottle;
-  return function(...args) {
-    if (!inThrottle) {
-      func.apply(this, args);
-      inThrottle = true;
-      setTimeout(() => inThrottle = false, limit);
-    }
-  };
-}
-
-function escapeSelector(selector) {
-  if (typeof selector !== 'string') return '';
-  return CSS.escape(selector);
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// SVG ICON CREATORS
-// ═══════════════════════════════════════════════════════════════════
-
-function createEnabledBellIcon() {
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("width", "18");
-  svg.setAttribute("height", "18");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "currentColor");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "2");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("aria-hidden", "true");
-
-  const path1 = document.createElementNS(ns, "path");
-  path1.setAttribute("d", "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9");
-
-  const path2 = document.createElementNS(ns, "path");
-  path2.setAttribute("d", "M13.73 21a2 2 0 0 1-3.46 0");
-
-  svg.appendChild(path1);
-  svg.appendChild(path2);
-
-  return svg;
-}
-
-function createDisabledBellIcon() {
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("width", "18");
-  svg.setAttribute("height", "18");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "2");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("aria-hidden", "true");
-
-  const paths = [
-    "M13.73 21a2 2 0 0 1-3 0",
-    "M18.63 13A17.89 17.89 0 0 1 18 8",
-    "M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14",
-    "M18 8a6 6 0 0 0-9.33-5"
-  ];
-
-  paths.forEach(d => {
-    const path = document.createElementNS(ns, "path");
-    path.setAttribute("d", d);
-    svg.appendChild(path);
-  });
-
-  const line = document.createElementNS(ns, "line");
-  line.setAttribute("x1", "1");
-  line.setAttribute("y1", "1");
-  line.setAttribute("x2", "23");
-  line.setAttribute("y2", "23");
-  svg.appendChild(line);
-
-  return svg;
-}
-
-function createKebabIcon() {
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("width", "14");
-  svg.setAttribute("height", "14");
-  svg.setAttribute("fill", "currentColor");
-  svg.setAttribute("viewBox", "0 0 16 16");
-  svg.setAttribute("aria-hidden", "true");
-
-  const path = document.createElementNS(ns, "path");
-  path.setAttribute("d", "M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z");
-  svg.appendChild(path);
-
-  return svg;
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// FIREBASE CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════
-
-const firebaseConfig = {
-  apiKey: "AIzaSyAQ2oBI80ESVFa-EQ9FhHYL4QQAUSiHado",
-  authDomain: "konvo-base-varient.firebaseapp.com",
-  projectId: "konvo-base-varient",
-  storageBucket: "konvo-base-varient.firebasestorage.app",
-  messagingSenderId: "655355743928",
-  appId: "1:655355743928:web:f8a9a7c7ba5d6e1503ee4d",
-  measurementId: "G-DTC5169FP8"
+const spamTracker = {
+  messageTimestamps: [],
+  warningShown: false,
+  lastCleanup: Date.now(),
+  lastMessageTime: 0,
 };
-const appStartTime = Date.now();
+
+// ═══════════════════════════════════════════════════════════════════
+// APPLICATION STATE
+// ═══════════════════════════════════════════════════════════════════
+
+const state = {
+  app: null,
+  db: null,
+  auth: null,
+  currentUserId: null,
+  currentUsername: "Anonymous",
+  currentProfilePhotoURL: null,
+  isCurrentUserAdmin: false,
+  deviceInfo: null,
+  userProfiles: {},
+  lastConfessionDocs: [],
+  lastChatDocs: [],
+  pendingProfileLoads: new Set(),
+  profileLoadTimeout: null,
+  confessionsCollection: null,
+  chatCollection: null,
+  typingStatusCollection: null,
+  currentPage: "chat",
+  isSelectionMode: false,
+  selectedMessages: new Set(),
+  currentContextMenuData: null,
+  replyToMessage: null,
+  notificationsEnabled: false,
+  unreadMessages: 0,
+  userIsAtBottom: true,
+  bottomObserver: null,
+  docToEditId: null,
+  collectionToEdit: null,
+  typingTimeout: null,
+  isInitialized: false,
+  isBanned: false,
+  isDeviceBanned: false,
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// LISTENER UNSUBSCRIBERS
+// ═══════════════════════════════════════════════════════════════════
+
+const unsubscribers = {
+  confessions: () => {},
+  chat: () => {},
+  userProfiles: () => {},
+  typingStatus: () => {},
+  pinned: () => {},
+  banCheck: () => {},
+  deviceBanCheck: () => {},
+  ipBanCheck: () => {},
+};
 
 // ═══════════════════════════════════════════════════════════════════
 // DOM ELEMENT REFERENCES
@@ -893,98 +284,140 @@ let menuPin = null;
 let menuBan = null;
 
 // ═══════════════════════════════════════════════════════════════════
-// APPLICATION STATE
+// UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════
 
-const state = {
-  app: null,
-  db: null,
-  auth: null,
-  currentUserId: null,
-  currentUsername: "Anonymous",
-  currentProfilePhotoURL: null,
-  isCurrentUserAdmin: false,
-  deviceInfo: null,
-  userProfiles: {},
-  lastConfessionDocs: [],
-  lastChatDocs: [],
-  pendingProfileLoads: new Set(),
-  profileLoadTimeout: null,
-  confessionsCollection: null,
-  chatCollection: null,
-  typingStatusCollection: null,
-  currentPage: "chat",
-  isSelectionMode: false,
-  selectedMessages: new Set(),
-  currentContextMenuData: null,
-  replyToMessage: null,
-  notificationsEnabled: false,
-  unreadMessages: 0,
-  userIsAtBottom: true,
-  bottomObserver: null,
-  docToEditId: null,
-  collectionToEdit: null,
-  typingTimeout: null,
-  isInitialized: false,
-  isBanned: false,
-  isDeviceBanned: false,
-};
+function withTimeout(promise, ms, fallbackValue = null) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms))
+  ]);
+}
+
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+function throttle(func, limit) {
+  let inThrottle;
+  return function(...args) {
+    if (!inThrottle) {
+      func.apply(this, args);
+      inThrottle = true;
+      setTimeout(() => inThrottle = false, limit);
+    }
+  };
+}
+
+function escapeSelector(selector) {
+  if (typeof selector !== 'string') return '';
+  return CSS.escape(selector);
+}
 
 // ═══════════════════════════════════════════════════════════════════
-// SPAM TRACKING
+// TEXT SANITIZATION & VALIDATION
 // ═══════════════════════════════════════════════════════════════════
 
-const spamTracker = {
-  messageTimestamps: [],      
-  warningShown: false,        
-  lastCleanup: Date.now(),    
-};
+function sanitizeText(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\r?\n/g, ' ')
+    .replace(/`/g, '&#x60;');
+}
 
-// ═══════════════════════════════════════════════════════════════════
-// LISTENER UNSUBSCRIBERS
-// ═══════════════════════════════════════════════════════════════════
+function isValidUsername(username) {
+  if (typeof username !== 'string') return false;
+  const trimmed = username.trim();
 
-const unsubscribers = {
-  confessions: () => {},
-  chat: () => {},
-  userProfiles: () => {},
-  typingStatus: () => {},
-  pinned: () => {},
-  banCheck: () => {},
-  deviceBanCheck: () => {},
-  ipBanCheck: () => {},
-};
+  if (trimmed.length === 0 || trimmed.length > USERNAME_MAX_LENGTH) return false;
 
-// ═══════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════
+  const reserved = [
+    'anonymous', 'admin', 'moderator', 'system', 'konvo', 'mod',
+    'support', 'staff', 'official', 'root', 'owner', 'bot', 'help'
+  ];
+  
+  const lowerUsername = trimmed.toLowerCase();
+  
+  if (reserved.some(r => lowerUsername === r || lowerUsername.includes(r))) {
+    return false;
+  }
 
-const REACTION_TYPES = Object.freeze({
-  thumbsup: "👍",
-  laugh: "😂",
-  surprised: "😮",
-  heart: "❤️",
-  skull: "💀"
-});
+  const usernameRegex = /^[A-Za-z0-9_\- ]+$/;
+  if (!usernameRegex.test(trimmed)) return false;
+  
+  if (trimmed.startsWith(' ') || trimmed.endsWith(' ')) return false;
 
-const USER_COLORS = Object.freeze([
-  "#ff79c6", "#8be9fd", "#50fa7b", "#bd93f9", "#ffb86c",
-  "#f1fa8c", "#ff5555", "#00e5ff", "#fab1a0", "#a29bfe",
-  "#55efc4", "#fdcb6e", "#e17055", "#d63031", "#e84393",
-  "#0984e3", "#00b894"
-]);
+  return true;
+}
 
-const MESSAGE_MAX_LENGTH = 500;
-const USERNAME_MAX_LENGTH = 30;
-const TYPING_TIMEOUT = 3000;
-const TYPING_STALE_THRESHOLD = 5000;
+function isValidMessageText(text) {
+  if (typeof text !== 'string') return false;
+  const trimmed = text.trim();
 
-const SPAM_CONFIG = Object.freeze({
-  MAX_MESSAGES: 10,           
-  TIME_WINDOW: 20000,         
-  WARNING_THRESHOLD: 7,       
-  CLEANUP_INTERVAL: 30000,    
-});
+  if (trimmed.length === 0 || trimmed.length > MESSAGE_MAX_LENGTH) return false;
+
+  const controlCharRegex = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
+  return !controlCharRegex.test(trimmed);
+}
+
+function isValidProfilePhotoURL(url) {
+  if (typeof url !== 'string') return false;
+  if (url.length > 500) return false;
+
+  const allowedPatterns = [
+    /^https:\/\/placehold\.co\/.+$/,
+    /^https:\/\/ui-avatars\.com\/.+$/,
+    /^https:\/\/api\.dicebear\.com\/.+$/,
+  ];
+
+  return allowedPatterns.some(pattern => pattern.test(url));
+}
+
+function validateMessageBeforePost(text) {
+  if (typeof text !== 'string') {
+    return { valid: false, error: "Invalid message format" };
+  }
+
+  const trimmed = text.trim();
+
+  if (trimmed.length === 0) {
+    return { valid: false, error: "Message cannot be empty" };
+  }
+
+  if (trimmed.length > MESSAGE_MAX_LENGTH) {
+    return { valid: false, error: `Message too long (max ${MESSAGE_MAX_LENGTH} characters)` };
+  }
+
+  const controlCharRegex = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
+  if (controlCharRegex.test(trimmed)) {
+    return { valid: false, error: "Message contains invalid characters" };
+  }
+
+  return { valid: true, text: trimmed };
+}
+
+function setTextSafely(element, text) {
+  if (element && element instanceof HTMLElement) {
+    element.textContent = text || '';
+  }
+}
+
+function createSafeTextNode(text) {
+  return document.createTextNode(text || '');
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
@@ -1039,56 +472,633 @@ function getDateHeader(date) {
 }
 
 function showToast(message, type = 'info') {
-  console.log(`[${type.toUpperCase()}]:`, message);
+  const existingToast = document.getElementById('app-toast');
+  if (existingToast) existingToast.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'app-toast';
+  toast.style.cssText = `
+    position: fixed;
+    top: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 14px;
+    z-index: 10000;
+    text-align: center;
+    max-width: 90%;
+    animation: slideDown 0.3s ease-out;
+  `;
+
   if (type === 'error') {
-    alert(message);
+    toast.style.background = 'linear-gradient(135deg, #ff6b6b, #ee5a5a)';
+    toast.style.color = 'white';
+  } else {
+    toast.style.background = 'linear-gradient(135deg, #4CAF50, #45a049)';
+    toast.style.color = 'white';
   }
-}
 
-function createActionContainer() {
-  const existingYesBtn = document.getElementById("confirmModalYesButton");
-  if (existingYesBtn && existingYesBtn.parentNode) {
-    const container = document.createElement("div");
-    container.id = "confirmModalActionContainer";
-    container.className = "flex gap-2 flex-1";
-    existingYesBtn.parentNode.replaceChild(container, existingYesBtn);
-    return container;
-  }
-  return confirmModalActionContainer;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    if (toast.parentNode) {
+      toast.style.animation = 'fadeOut 0.3s ease-out forwards';
+      setTimeout(() => toast.remove(), 300);
+    }
+  }, 4000);
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// CLEANUP FUNCTIONS
+// FINGERPRINT GENERATION
 // ═══════════════════════════════════════════════════════════════════
 
-function cleanupAllListeners() {
-  Object.entries(unsubscribers).forEach(([key, unsub]) => {
-    if (typeof unsub === 'function') {
-      try {
-        unsub();
-        unsubscribers[key] = () => {};
-      } catch (e) {
-        console.warn(`Failed to unsubscribe ${key}:`, e);
-      }
+async function generateDeviceFingerprint() {
+  try {
+    const savedFingerprint = localStorage.getItem(FINGERPRINT_STORAGE_KEY);
+    
+    if (savedFingerprint && savedFingerprint.length > 0) {
+      deviceState.fingerprint = savedFingerprint;
+      return savedFingerprint;
     }
-  });
+  } catch (e) {
+    // localStorage not available
+  }
+
+  try {
+    if (typeof FingerprintJS === 'undefined') {
+      return createAndSaveStableFallback();
+    }
+
+    const fp = await withTimeout(FingerprintJS.load(), 5000, null);
+    if (!fp) {
+      return createAndSaveStableFallback();
+    }
+
+    const result = await withTimeout(fp.get(), 5000, null);
+    if (!result) {
+      return createAndSaveStableFallback();
+    }
+
+    const fingerprint = result.visitorId;
+    saveFingerprint(fingerprint);
+    deviceState.fingerprint = fingerprint;
+    return fingerprint;
+
+  } catch (error) {
+    return createAndSaveStableFallback();
+  }
 }
 
-function cleanupNonBanListeners() {
-  const banListenerKeys = ['banCheck', 'deviceBanCheck', 'ipBanCheck'];
+function createAndSaveStableFallback() {
+  try {
+    const savedFingerprint = localStorage.getItem(FINGERPRINT_STORAGE_KEY);
+    if (savedFingerprint && savedFingerprint.length > 0) {
+      deviceState.fingerprint = savedFingerprint;
+      return savedFingerprint;
+    }
+  } catch (e) {
+    // Continue
+  }
 
-  Object.entries(unsubscribers).forEach(([key, unsub]) => {
-    if (banListenerKeys.includes(key)) return;
+  const components = [
+    navigator.userAgent,
+    navigator.language,
+    screen.width + 'x' + screen.height,
+    screen.colorDepth,
+    new Date().getTimezoneOffset(),
+    navigator.hardwareConcurrency || 'unknown',
+    navigator.deviceMemory || 'unknown',
+    navigator.platform,
+  ];
 
-    if (typeof unsub === 'function') {
-      try {
-        unsub();
-        unsubscribers[key] = () => {};
-      } catch (e) {
-        console.warn(`Failed to unsubscribe ${key}:`, e);
+  let hash = 0;
+  const str = components.join('|||');
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+
+  const randomPart = generateRandomString(8);
+  const fallbackId = 'fb_' + Math.abs(hash).toString(36) + '_' + randomPart;
+
+  saveFingerprint(fallbackId);
+  deviceState.fingerprint = fallbackId;
+  
+  return fallbackId;
+}
+
+function generateRandomString(length) {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  
+  try {
+    const array = new Uint8Array(length);
+    crypto.getRandomValues(array);
+    for (let i = 0; i < length; i++) {
+      result += chars[array[i] % chars.length];
+    }
+    return result;
+  } catch (e) {
+    for (let i = 0; i < length; i++) {
+      result += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return result;
+  }
+}
+
+function saveFingerprint(fingerprint) {
+  try {
+    localStorage.setItem(FINGERPRINT_STORAGE_KEY, fingerprint);
+  } catch (e) {
+    // Could not save
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// IP ADDRESS DETECTION
+// ═══════════════════════════════════════════════════════════════════
+
+async function getUserIPAddress() {
+  const ipServices = [
+    'https://api.ipify.org?format=json',
+    'https://ipapi.co/json/'
+  ];
+
+  try {
+    const fetchPromises = ipServices.map(async (service) => {
+      const response = await fetch(service, { mode: 'cors' });
+      if (!response.ok) throw new Error('Failed');
+      const data = await response.json();
+      if (data.ip && isValidIP(data.ip)) {
+        return data.ip;
+      }
+      throw new Error('Invalid IP');
+    });
+
+    const result = await withTimeout(
+      Promise.any(fetchPromises),
+      3000,
+      null
+    );
+
+    if (result) {
+      deviceState.ipAddress = result;
+      return result;
+    }
+  } catch (error) {
+    // IP detection failed
+  }
+
+  return null;
+}
+
+function isValidIP(ip) {
+  if (!ip || typeof ip !== 'string') return false;
+  const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+  const ipv6Pattern = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^([0-9a-fA-F]{1,4}:)*:([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4}$|^::$/;
+
+  if (ipv4Pattern.test(ip)) {
+    const parts = ip.split('.').map(Number);
+    return parts.every(part => part >= 0 && part <= 255);
+  }
+
+  return ipv6Pattern.test(ip);
+}
+
+function hashIP(ip) {
+  if (!ip) return '';
+  let hash = 0;
+  for (let i = 0; i < ip.length; i++) {
+    const char = ip.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return 'ip_' + Math.abs(hash).toString(36);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DEVICE IDENTIFICATION
+// ═══════════════════════════════════════════════════════════════════
+
+async function initializeDeviceIdentification() {
+  try {
+    const result = await withTimeout(
+      Promise.all([
+        generateDeviceFingerprint(),
+        getUserIPAddress()
+      ]),
+      8000,
+      null
+    );
+
+    if (!result) {
+      return {
+        fingerprint: createAndSaveStableFallback(),
+        ipAddress: null,
+        ipHash: null,
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        screenResolution: `${screen.width}x${screen.height}`,
+        platform: navigator.platform,
+      };
+    }
+
+    const [fingerprint, ipAddress] = result;
+
+    deviceState.fingerprint = fingerprint;
+    deviceState.ipAddress = ipAddress;
+    deviceState.isIdentified = true;
+
+    return {
+      fingerprint,
+      ipAddress,
+      ipHash: hashIP(ipAddress),
+      userAgent: navigator.userAgent,
+      language: navigator.language,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      screenResolution: `${screen.width}x${screen.height}`,
+      platform: navigator.platform,
+    };
+
+  } catch (error) {
+    return {
+      fingerprint: createAndSaveStableFallback(),
+      ipAddress: null,
+      ipHash: null,
+      userAgent: navigator.userAgent,
+      language: navigator.language,
+      timezone: null,
+      screenResolution: `${screen.width}x${screen.height}`,
+      platform: navigator.platform,
+    };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// BAN CHECKING FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════
+
+async function checkAllBans(db, userId, deviceInfo) {
+  if (!db) return { isBanned: false };
+
+  try {
+    // Check user ban first
+    if (userId) {
+      const userBanRef = doc(db, "banned_users", userId);
+      const userBanSnap = await getDoc(userBanRef);
+      if (userBanSnap.exists()) {
+        return { isBanned: true, banType: 'user', reason: 'User banned' };
       }
     }
+
+    // Check device fingerprint ban
+    if (deviceInfo?.fingerprint) {
+      const fpBanRef = doc(db, "banned_devices", deviceInfo.fingerprint);
+      const fpBanSnap = await getDoc(fpBanRef);
+      if (fpBanSnap.exists()) {
+        return { isBanned: true, banType: 'device', reason: 'Device banned' };
+      }
+    }
+
+    // Check IP ban
+    if (deviceInfo?.ipHash) {
+      const ipBanRef = doc(db, "banned_ips", deviceInfo.ipHash);
+      const ipBanSnap = await getDoc(ipBanRef);
+      if (ipBanSnap.exists()) {
+        return { isBanned: true, banType: 'ip', reason: 'IP address banned' };
+      }
+    }
+
+    return { isBanned: false };
+  } catch (error) {
+    return { isBanned: false, error: error.message };
+  }
+}
+
+async function registerDevice(db, userId, deviceInfo) {
+  if (!db || !userId || !deviceInfo?.fingerprint) return;
+
+  try {
+    const deviceDocId = `${userId}_${deviceInfo.fingerprint}`;
+    const deviceRef = doc(db, "user_devices", deviceDocId);
+    const deviceSnap = await getDoc(deviceRef);
+
+    if (deviceSnap.exists()) {
+      await updateDoc(deviceRef, {
+        lastSeen: serverTimestamp(),
+        ipAddress: deviceInfo.ipAddress || null,
+        ipHash: deviceInfo.ipHash || null,
+        userAgent: deviceInfo.userAgent || null,
+      });
+    } else {
+      await setDoc(deviceRef, {
+        userId: userId,
+        fingerprint: deviceInfo.fingerprint,
+        ipAddress: deviceInfo.ipAddress || null,
+        ipHash: deviceInfo.ipHash || null,
+        userAgent: deviceInfo.userAgent || null,
+        language: deviceInfo.language || null,
+        timezone: deviceInfo.timezone || null,
+        screenResolution: deviceInfo.screenResolution || null,
+        platform: deviceInfo.platform || null,
+        firstSeen: serverTimestamp(),
+        lastSeen: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    if (error.code === 'permission-denied') {
+      state.isDeviceBanned = true;
+      showDeviceBannedScreen('Device or IP is banned');
+      throw error;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// UI HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════
+
+function hideBanCheckOverlay() {
+  const overlay = document.getElementById('banCheckOverlay');
+  if (overlay) {
+    overlay.classList.add('hidden');
+    setTimeout(() => {
+      overlay.style.display = 'none';
+    }, 300);
+  }
+}
+
+function showDeviceBannedScreen(reason = 'Device banned') {
+  const appContainer = document.getElementById('app') || document.body;
+
+  Array.from(appContainer.children).forEach(child => {
+    if (child.id !== 'banOverlayScreen') {
+      child.style.display = 'none';
+    }
   });
+
+  const existingOverlay = document.getElementById('banOverlayScreen');
+  if (existingOverlay) existingOverlay.remove();
+
+  const existingCheck = document.getElementById('banCheckOverlay');
+  if (existingCheck) existingCheck.style.display = 'none';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'banOverlayScreen';
+  overlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    background-color: #0a0a0a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 99999;
+    gap: 0.5rem;
+    padding: 1rem;
+  `;
+
+  const h1 = document.createElement('h1');
+  h1.style.cssText = 'font-size: 1.875rem; color: #ef4444; font-weight: bold;';
+  h1.textContent = '🚫 ACCESS DENIED';
+
+  const p1 = document.createElement('p');
+  p1.style.cssText = 'color: #888; font-size: 0.875rem;';
+  p1.textContent = 'This device has been banned from Konvo.';
+
+  const p2 = document.createElement('p');
+  p2.style.cssText = 'color: #666; font-size: 0.75rem;';
+  p2.textContent = 'Reason: ' + sanitizeText(reason);
+
+  const p3 = document.createElement('p');
+  p3.style.cssText = 'color: #555; font-size: 0.75rem; margin-top: 1rem;';
+  p3.textContent = 'If you believe this is a mistake, please wait for admin review.';
+
+  overlay.appendChild(h1);
+  overlay.appendChild(p1);
+  overlay.appendChild(p2);
+  overlay.appendChild(p3);
+  document.body.appendChild(overlay);
+  document.body.classList.add('device-banned');
+}
+
+function showBannedScreen() {
+  const appContainer = document.getElementById('app') || document.body;
+
+  Array.from(appContainer.children).forEach(child => {
+    if (child.id !== 'banOverlayScreen') {
+      child.style.display = 'none';
+    }
+  });
+
+  const existingOverlay = document.getElementById('banOverlayScreen');
+  if (existingOverlay) existingOverlay.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'banOverlayScreen';
+  overlay.className = 'banned-overlay';
+  overlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    background-color: #0a0a0a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 99999;
+    gap: 1rem;
+  `;
+
+  const h1 = document.createElement('h1');
+  h1.style.cssText = 'font-size: 1.875rem; color: #ef4444; font-weight: bold;';
+  h1.textContent = '🚫 ACCESS DENIED';
+
+  const p = document.createElement('p');
+  p.style.cssText = 'color: #888; font-size: 0.875rem;';
+  p.textContent = 'You have been banned from Konvo.';
+
+  const p2 = document.createElement('p');
+  p2.style.cssText = 'color: #555; font-size: 0.75rem; margin-top: 1rem;';
+  p2.textContent = 'If you believe this is a mistake, please wait for admin review.';
+
+  overlay.appendChild(h1);
+  overlay.appendChild(p);
+  overlay.appendChild(p2);
+  document.body.appendChild(overlay);
+}
+
+function showUnbannedScreen() {
+  const banOverlay = document.getElementById('banOverlayScreen');
+  if (banOverlay) banOverlay.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'unbanOverlayScreen';
+  overlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    background-color: #0a0a0a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 99999;
+    gap: 1rem;
+  `;
+
+  const h1 = document.createElement('h1');
+  h1.style.cssText = 'font-size: 1.875rem; color: #22c55e; font-weight: bold;';
+  h1.textContent = '✅ ACCESS RESTORED';
+
+  const p = document.createElement('p');
+  p.style.cssText = 'color: #888; font-size: 0.875rem; text-align: center; max-width: 300px;';
+  p.textContent = 'Your ban has been lifted. Click below to continue using Konvo.';
+
+  const btn = document.createElement('button');
+  btn.style.cssText = `
+    margin-top: 1.5rem;
+    padding: 0.75rem 2rem;
+    background-color: #22c55e;
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 1rem;
+    cursor: pointer;
+  `;
+  btn.textContent = 'CONTINUE';
+  btn.onclick = () => window.location.reload();
+
+  overlay.appendChild(h1);
+  overlay.appendChild(p);
+  overlay.appendChild(btn);
+  document.body.appendChild(overlay);
+}
+
+async function checkFullUnbanStatus() {
+  if (!state.db || !state.deviceInfo) return;
+
+  try {
+    const banResult = await checkAllBans(state.db, state.currentUserId, state.deviceInfo);
+    
+    if (!banResult.isBanned) {
+      state.isBanned = false;
+      state.isDeviceBanned = false;
+      showUnbannedScreen();
+    }
+  } catch (error) {
+    // Error checking unban status
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SVG ICON CREATORS
+// ═══════════════════════════════════════════════════════════════════
+
+function createEnabledBellIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "18");
+  svg.setAttribute("height", "18");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "currentColor");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("aria-hidden", "true");
+
+  const path1 = document.createElementNS(ns, "path");
+  path1.setAttribute("d", "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9");
+
+  const path2 = document.createElementNS(ns, "path");
+  path2.setAttribute("d", "M13.73 21a2 2 0 0 1-3.46 0");
+
+  svg.appendChild(path1);
+  svg.appendChild(path2);
+
+  return svg;
+}
+
+function createDisabledBellIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "18");
+  svg.setAttribute("height", "18");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("aria-hidden", "true");
+
+  const paths = [
+    "M13.73 21a2 2 0 0 1-3 0",
+    "M18.63 13A17.89 17.89 0 0 1 18 8",
+    "M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14",
+    "M18 8a6 6 0 0 0-9.33-5"
+  ];
+
+  paths.forEach(d => {
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("d", d);
+    svg.appendChild(path);
+  });
+
+  const line = document.createElementNS(ns, "line");
+  line.setAttribute("x1", "1");
+  line.setAttribute("y1", "1");
+  line.setAttribute("x2", "23");
+  line.setAttribute("y2", "23");
+  svg.appendChild(line);
+
+  return svg;
+}
+
+function createKebabIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("fill", "currentColor");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", "M9.5 13a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0-5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z");
+  svg.appendChild(path);
+
+  return svg;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CHARACTER COUNTER
+// ═══════════════════════════════════════════════════════════════════
+
+function updateCharacterCounter(input, counter) {
+  if (!input || !counter) return;
+
+  const currentLength = input.value.length;
+  const maxLength = MESSAGE_MAX_LENGTH;
+
+  counter.textContent = `${currentLength}/${maxLength}`;
+
+  if (currentLength > 0) {
+    counter.classList.add('visible');
+  } else {
+    counter.classList.remove('visible');
+  }
+
+  counter.classList.remove('warning', 'danger', 'limit');
+
+  if (currentLength >= maxLength) {
+    counter.classList.add('limit');
+  } else if (currentLength >= maxLength * 0.95) {
+    counter.classList.add('danger');
+  } else if (currentLength >= maxLength * 0.8) {
+    counter.classList.add('warning');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1117,6 +1127,15 @@ function checkSpamStatus() {
     cleanupSpamTracker();
   }
 
+  // Check minimum interval between messages
+  if (now - spamTracker.lastMessageTime < SPAM_CONFIG.MIN_MESSAGE_INTERVAL) {
+    return {
+      allowed: false,
+      reason: 'too_fast',
+      message: 'Please wait a moment before sending another message.'
+    };
+  }
+
   const cutoff = now - SPAM_CONFIG.TIME_WINDOW;
   spamTracker.messageTimestamps = spamTracker.messageTimestamps.filter(
     ts => ts > cutoff
@@ -1137,7 +1156,7 @@ function checkSpamStatus() {
     const remaining = SPAM_CONFIG.MAX_MESSAGES - messageCount;
     return { 
       allowed: true, 
-      warning: `Spamming = Getting Banned ⚠️.`
+      warning: `Slow down! ${remaining} messages left before ban.`
     };
   }
 
@@ -1145,13 +1164,13 @@ function checkSpamStatus() {
 }
 
 function recordMessage() {
-  spamTracker.messageTimestamps.push(Date.now());
+  const now = Date.now();
+  spamTracker.messageTimestamps.push(now);
+  spamTracker.lastMessageTime = now;
 }
 
 async function autoBanForSpam() {
   if (!state.db || !state.currentUserId) return;
-
-  console.log('Auto-banning user for spam...');
 
   try {
     const userId = state.currentUserId;
@@ -1165,43 +1184,12 @@ async function autoBanForSpam() {
         actualUsername = userDoc.data().username || '';
       }
     } catch (e) {
-      console.warn('Could not fetch username for ban:', e);
-    }
-
-    let deviceRegistered = false;
-    let storedIpHash = null;
-
-    if (fingerprint) {
-      const deviceDocId = `${userId}_${fingerprint}`;
-      const deviceRef = doc(state.db, "user_devices", deviceDocId);
-
-      try {
-        const deviceSnap = await getDoc(deviceRef);
-        if (deviceSnap.exists()) {
-          deviceRegistered = true;
-          storedIpHash = deviceSnap.data().ipHash || null;
-        } else {
-          await setDoc(deviceRef, {
-            userId: userId,
-            fingerprint: fingerprint,
-            ipHash: ipHash || null,
-            ipAddress: state.deviceInfo?.ipAddress || null,
-            firstSeen: serverTimestamp(),
-            lastSeen: serverTimestamp(),
-            userAgent: state.deviceInfo?.userAgent || null,
-            platform: state.deviceInfo?.platform || null,
-          });
-          deviceRegistered = true;
-          storedIpHash = ipHash;
-          console.log('Device registered for ban');
-        }
-      } catch (e) {
-        console.warn('Device check/registration failed:', e);
-      }
+      // Could not fetch username
     }
 
     const batch = writeBatch(state.db);
 
+    // Ban user
     const userRef = doc(state.db, "users", userId);
     batch.set(userRef, { banned: true }, { merge: true });
 
@@ -1213,39 +1201,59 @@ async function autoBanForSpam() {
       username: actualUsername
     });
 
-    if (fingerprint && deviceRegistered) {
-      const fingerprintBanRef = doc(state.db, "banned_devices", fingerprint);
-      batch.set(fingerprintBanRef, {
-        fingerprint: fingerprint,
-        userId: userId,
-        username: actualUsername,
-        bannedBy: "SYSTEM_AUTO_BAN",
-        timestamp: serverTimestamp(),
-        reason: "Automatic ban: Spam detection",
-        userAgent: state.deviceInfo?.userAgent || null,
-        platform: state.deviceInfo?.platform || null,
-      });
-      console.log('Fingerprint ban queued');
+    // Ban device fingerprint
+    if (fingerprint) {
+      const deviceDocId = `${userId}_${fingerprint}`;
+      const deviceRef = doc(state.db, "user_devices", deviceDocId);
+      
+      try {
+        const deviceSnap = await getDoc(deviceRef);
+        if (deviceSnap.exists() && deviceSnap.data().userId === userId) {
+          const fingerprintBanRef = doc(state.db, "banned_devices", fingerprint);
+          batch.set(fingerprintBanRef, {
+            fingerprint: fingerprint,
+            userId: userId,
+            username: actualUsername,
+            bannedBy: "SYSTEM_AUTO_BAN",
+            timestamp: serverTimestamp(),
+            reason: "Automatic ban: Spam detection",
+            userAgent: state.deviceInfo?.userAgent || null,
+            platform: state.deviceInfo?.platform || null,
+          });
+        }
+      } catch (e) {
+        // Device check failed
+      }
     }
 
-    if (ipHash && deviceRegistered && storedIpHash && ipHash === storedIpHash) {
-      const ipBanRef = doc(state.db, "banned_ips", ipHash);
-      batch.set(ipBanRef, {
-        ipHash: ipHash,
-        fingerprint: fingerprint,  
-        userId: userId,
-        username: actualUsername,
-        bannedBy: "SYSTEM_AUTO_BAN",
-        timestamp: serverTimestamp(),
-        reason: "Automatic ban: Spam detection",
-      });
-      console.log('IP hash ban queued');
-    } else {
-      console.warn('IP ban skipped - hash mismatch or not available');
+    // Ban IP hash
+    if (ipHash && fingerprint) {
+      const deviceDocId = `${userId}_${fingerprint}`;
+      const deviceRef = doc(state.db, "user_devices", deviceDocId);
+      
+      try {
+        const deviceSnap = await getDoc(deviceRef);
+        if (deviceSnap.exists()) {
+          const deviceData = deviceSnap.data();
+          if (deviceData.userId === userId && deviceData.ipHash === ipHash) {
+            const ipBanRef = doc(state.db, "banned_ips", ipHash);
+            batch.set(ipBanRef, {
+              ipHash: ipHash,
+              fingerprint: fingerprint,
+              userId: userId,
+              username: actualUsername,
+              bannedBy: "SYSTEM_AUTO_BAN",
+              timestamp: serverTimestamp(),
+              reason: "Automatic ban: Spam detection",
+            });
+          }
+        }
+      } catch (e) {
+        // IP ban check failed
+      }
     }
 
     await batch.commit();
-    console.log('User auto-banned for spam successfully');
 
     state.isBanned = true;
     state.isDeviceBanned = true;
@@ -1253,7 +1261,6 @@ async function autoBanForSpam() {
     showSpamBannedScreen();
 
   } catch (error) {
-    console.error('Auto-ban error:', error);
     showSpamBannedScreen();
   }
 }
@@ -1292,15 +1299,15 @@ function showSpamBannedScreen() {
 
   const p1 = document.createElement('p');
   p1.style.cssText = 'color: #888; font-size: 0.875rem;';
-  p1.textContent = 'You have been banned by ADMIN for SPAMMING.';
+  p1.textContent = 'You have been automatically banned for spamming.';
 
   const p2 = document.createElement('p');
   p2.style.cssText = 'color: #666; font-size: 0.75rem;';
-  p2.textContent = `Reason: Mana kiya tha Maat kar.`;
+  p2.textContent = 'Reason: Exceeded message rate limit.';
 
   const p3 = document.createElement('p');
   p3.style.cssText = 'color: #555; font-size: 0.7rem; margin-top: 1rem;';
-  p3.textContent = 'Le Lauda ho gya BAN.';
+  p3.textContent = 'This ban affects your device and IP address.';
 
   overlay.appendChild(h1);
   overlay.appendChild(p1);
@@ -1311,9 +1318,7 @@ function showSpamBannedScreen() {
 
 function showSpamWarning(message) {
   const existingToast = document.getElementById('spam-warning-toast');
-  if (existingToast) {
-    existingToast.remove();
-  }
+  if (existingToast) existingToast.remove();
 
   const toast = document.createElement('div');
   toast.id = 'spam-warning-toast';
@@ -1329,49 +1334,18 @@ function showSpamWarning(message) {
     font-weight: bold;
     font-size: 14px;
     z-index: 10000;
-    box-shadow: 0 4px 20px rgba(238, 90, 90, 0.4);
-    animation: slideDown 0.3s ease-out, shake 0.5s ease-in-out;
     text-align: center;
     max-width: 90%;
+    animation: slideDown 0.3s ease-out;
   `;
   toast.textContent = message;
   document.body.appendChild(toast);
 
   setTimeout(() => {
     if (toast.parentNode) {
-      toast.style.animation = 'fadeOut 0.3s ease-out forwards';
-      setTimeout(() => toast.remove(), 300);
+      toast.remove();
     }
   }, 4000);
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// CHARACTER COUNTER
-// ═══════════════════════════════════════════════════════════════════
-
-function updateCharacterCounter(input, counter) {
-  if (!input || !counter) return;
-
-  const currentLength = input.value.length;
-  const maxLength = MESSAGE_MAX_LENGTH;
-
-  counter.textContent = `${currentLength}/${maxLength}`;
-
-  if (currentLength > 0) {
-    counter.classList.add('visible');
-  } else {
-    counter.classList.remove('visible');
-  }
-
-  counter.classList.remove('warning', 'danger', 'limit');
-
-  if (currentLength >= maxLength) {
-    counter.classList.add('limit');
-  } else if (currentLength >= maxLength * 0.95) {
-    counter.classList.add('danger');
-  } else if (currentLength >= maxLength * 0.8) {
-    counter.classList.add('warning');
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1382,33 +1356,31 @@ function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js', { scope: '/' })
       .then(reg => {
-        console.log('SW registered:', reg.scope);
-
         reg.addEventListener('updatefound', () => {
           const newWorker = reg.installing;
           if (newWorker) {
             newWorker.addEventListener('statechange', () => {
               if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                console.log('New version available');
+                // New version available
               }
             });
           }
         });
       })
-      .catch(err => console.error('SW registration failed:', err));
+      .catch(err => {
+        // SW registration failed
+      });
   }
 }
 
 function setupConnectionMonitor() {
   window.addEventListener('online', () => {
-    console.log('Connection restored');
     if (state.isInitialized) {
       showPage(state.currentPage);
     }
   });
 
   window.addEventListener('offline', () => {
-    console.log('Connection lost');
     showToast("You're offline. Messages will sync when connected.", "info");
   });
 }
@@ -1449,7 +1421,7 @@ async function handleNotificationClick(e) {
         updateNotificationIcon();
       }
     } catch (err) {
-      console.error("Notification permission error:", err);
+      // Notification permission error
     }
   } else {
     showToast("Notifications are blocked. Please enable in browser settings.", "error");
@@ -1496,8 +1468,42 @@ async function showNotification(title, body) {
     }
     new Notification(safeTitle, { body: safeBody, icon: "icon.jpg" });
   } catch (e) {
-    console.error('Notification error:', e);
+    // Notification error
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CLEANUP FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════
+
+function cleanupAllListeners() {
+  Object.entries(unsubscribers).forEach(([key, unsub]) => {
+    if (typeof unsub === 'function') {
+      try {
+        unsub();
+        unsubscribers[key] = () => {};
+      } catch (e) {
+        // Failed to unsubscribe
+      }
+    }
+  });
+}
+
+function cleanupNonBanListeners() {
+  const banListenerKeys = ['banCheck', 'deviceBanCheck', 'ipBanCheck'];
+
+  Object.entries(unsubscribers).forEach(([key, unsub]) => {
+    if (banListenerKeys.includes(key)) return;
+
+    if (typeof unsub === 'function') {
+      try {
+        unsub();
+        unsubscribers[key] = () => {};
+      } catch (e) {
+        // Failed to unsubscribe
+      }
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1560,7 +1566,6 @@ async function togglePinMessage() {
 
     await batch.commit();
   } catch (e) {
-    console.error('Pin error:', e);
     showToast("Failed to pin message. Check Admin permissions.", "error");
   }
 }
@@ -1584,7 +1589,6 @@ async function toggleBanUser() {
     const banDocSnap = await getDoc(banDocRef);
     isBanned = banDocSnap.exists();
   } catch (e) {
-    console.error("Error checking ban status:", e);
     showToast("Error checking ban status. Please try again.", "error");
     return;
   }
@@ -1594,7 +1598,7 @@ async function toggleBanUser() {
 
   const confirmMessage = isBanned 
     ? `Unban ${safeUsername}? This will restore their access including their device and IP.`
-    : `Ban ${safeUsername}? This will also ban their device fingerprint and IP address, preventing them from returning even with a new browser.`;
+    : `Ban ${safeUsername}? This will also ban their device fingerprint and IP address.`;
 
   if (!confirm(confirmMessage)) {
     return;
@@ -1622,6 +1626,7 @@ async function toggleBanUser() {
       });
     }
 
+    // Get user's devices
     const devicesQuery = query(
       collection(state.db, "user_devices"),
       where("userId", "==", userId)
@@ -1631,7 +1636,6 @@ async function toggleBanUser() {
     try {
       devicesSnapshot = await getDocs(devicesQuery);
     } catch (e) {
-      console.warn("Could not fetch user devices:", e);
       devicesSnapshot = { docs: [] };
     }
 
@@ -1671,6 +1675,7 @@ async function toggleBanUser() {
         } else {
           batch.set(ipBanRef, {
             ipHash: deviceData.ipHash,
+            fingerprint: deviceData.fingerprint || null,
             userId: userId,
             username: username?.substring(0, 30) || 'Unknown',
             bannedBy: state.currentUserId,
@@ -1692,13 +1697,12 @@ async function toggleBanUser() {
 
     showToast(
       isBanned 
-        ? `✅ User UNBANNED. Removed ${devicesCount} device ban(s) and ${ipsCount} IP ban(s).`
-        : `🚫 User BANNED. Added ${devicesCount} device ban(s) and ${ipsCount} IP ban(s).`, 
+        ? `User unbanned. Removed ${devicesCount} device ban(s) and ${ipsCount} IP ban(s).`
+        : `User banned. Added ${devicesCount} device ban(s) and ${ipsCount} IP ban(s).`, 
       "info"
     );
 
   } catch (e) {
-    console.error('Ban/Unban error:', e);
     showToast(`Failed to ${action.toLowerCase()} user: ${e.message}`, "error");
   }
 }
@@ -1709,14 +1713,14 @@ async function toggleBanUser() {
 
 async function initFirebase() {
   const globalTimeout = setTimeout(() => {
-    console.warn('Initialization timeout - showing app anyway');
     hideBanCheckOverlay();
   }, 15000);
 
   try {
-    console.log('Initializing device identification...');
+    // Step 1: Initialize device identification FIRST
     state.deviceInfo = await initializeDeviceIdentification();
 
+    // Step 2: Initialize Firebase
     state.app = initializeApp(firebaseConfig);
 
     try {
@@ -1726,7 +1730,6 @@ async function initFirebase() {
         })
       });
     } catch (persistenceError) {
-      console.warn('Persistence initialization failed, using default:', persistenceError);
       state.db = initializeFirestore(state.app, {});
     }
 
@@ -1736,7 +1739,6 @@ async function initFirebase() {
       try {
         await handleAuthStateChange(user);
       } catch (error) {
-        console.error('Auth state change error:', error);
         hideBanCheckOverlay();
       } finally {
         clearTimeout(globalTimeout);
@@ -1744,7 +1746,6 @@ async function initFirebase() {
     });
 
   } catch (error) {
-    console.error("Error initializing Firebase:", error);
     setTextSafely(loading, "Error: Could not initialize. Please refresh.");
     hideBanCheckOverlay();
     clearTimeout(globalTimeout);
@@ -1755,33 +1756,48 @@ async function initFirebase() {
 async function handleAuthStateChange(user) {
   if (user) {
     state.currentUserId = user.uid;
-    console.log("Authenticated with UID:", state.currentUserId);
 
+    // ════════════════════════════════════════════════════════════
+    // CRITICAL: Check ALL bans BEFORE registering device
+    // ════════════════════════════════════════════════════════════
+    
     try {
-      await registerDevice(state.db, state.currentUserId, state.deviceInfo);
-      console.log('Device registered successfully');
-    } catch (regError) {
-      console.warn('Device registration failed:', regError);
-    }
-
-    try {
-      console.log('Checking device ban status...');
-      const deviceBanCheck = await withTimeout(
-        checkDeviceBan(state.db, state.deviceInfo),
+      const banResult = await withTimeout(
+        checkAllBans(state.db, state.currentUserId, state.deviceInfo),
         5000,
-        { isBanned: false, reason: null }
+        { isBanned: false }
       );
 
-      if (deviceBanCheck.isBanned) {
-        console.log('Device is banned:', deviceBanCheck.reason);
-        state.isDeviceBanned = true;
-        showDeviceBannedScreen(deviceBanCheck.reason);
-        return;
+      if (banResult.isBanned) {
+        state.isBanned = banResult.banType === 'user';
+        state.isDeviceBanned = banResult.banType === 'device' || banResult.banType === 'ip';
+        
+        if (state.isDeviceBanned) {
+          showDeviceBannedScreen(banResult.reason);
+        } else {
+          showBannedScreen();
+        }
+        return; // STOP - Don't register device or continue
       }
     } catch (banCheckError) {
-      console.warn('Device ban check failed, continuing:', banCheckError);
+      // Continue but with caution
     }
 
+    // ════════════════════════════════════════════════════════════
+    // Only register device AFTER ban checks pass
+    // ════════════════════════════════════════════════════════════
+    
+    try {
+      await registerDevice(state.db, state.currentUserId, state.deviceInfo);
+    } catch (regError) {
+      if (regError.code === 'permission-denied') {
+        state.isDeviceBanned = true;
+        showDeviceBannedScreen('Device or IP is banned');
+        return;
+      }
+    }
+
+    // Continue with normal initialization
     state.confessionsCollection = collection(state.db, "confessions");
     state.chatCollection = collection(state.db, "chat");
     state.typingStatusCollection = collection(state.db, "typingStatus");
@@ -1797,13 +1813,13 @@ async function handleAuthStateChange(user) {
     try {
       await checkAdminStatus();
     } catch (e) {
-      console.error("Admin check failed:", e);
+      // Admin check failed
     }
 
     try {
       await loadUserProfile();
     } catch (e) {
-      console.error("Profile load failed:", e);
+      // Profile load failed
     }
 
     hideBanCheckOverlay();
@@ -1816,7 +1832,6 @@ async function handleAuthStateChange(user) {
     try {
       await signInAnonymously(state.auth);
     } catch (e) {
-      console.error("Anonymous auth failed:", e);
       setTextSafely(loading, "Error: Could not sign in. Please refresh.");
       hideBanCheckOverlay();
     }
@@ -1829,14 +1844,8 @@ async function checkAdminStatus() {
   try {
     const adminDocRef = doc(state.db, "admins", state.currentUserId);
     const adminDocSnap = await getDoc(adminDocRef);
-
     state.isCurrentUserAdmin = adminDocSnap.exists();
-
-    if (state.isCurrentUserAdmin) {
-      console.log("Admin privileges active");
-    }
   } catch (e) {
-    console.error("Admin check error:", e);
     state.isCurrentUserAdmin = false;
   }
 }
@@ -1883,7 +1892,6 @@ function listenForPinnedMessages() {
       pinnedMessageBar.style.display = "none";
     }
   }, (error) => {
-    console.warn("Pinned messages listener error:", error);
     if (pinnedMessageBar) {
       pinnedMessageBar.classList.add("hidden");
     }
@@ -1916,7 +1924,7 @@ function listenForBanStatus() {
       }
     },
     (error) => {
-      console.warn("Ban check error:", error);
+      // Ban check error
     }
   );
 }
@@ -1950,7 +1958,7 @@ function listenForDeviceBans() {
       }
     },
     (error) => {
-      console.warn("Device ban check error:", error);
+      // Device ban check error
     }
   );
 
@@ -1971,109 +1979,10 @@ function listenForDeviceBans() {
         }
       },
       (error) => {
-        console.warn("IP ban check error:", error);
+        // IP ban check error
       }
     );
   }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// BAN SCREENS
-// ═══════════════════════════════════════════════════════════════════
-
-function showUnbannedScreen() {
-  const banOverlay = document.getElementById('banOverlayScreen');
-  if (banOverlay) banOverlay.remove();
-
-  const overlay = document.createElement('div');
-  overlay.id = 'unbanOverlayScreen';
-  overlay.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background-color: #0a0a0a;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 99999;
-    gap: 1rem;
-  `;
-
-  const h1 = document.createElement('h1');
-  h1.style.cssText = 'font-size: 1.875rem; color: #22c55e; font-weight: bold;';
-  h1.textContent = '✅ ACCESS RESTORED';
-
-  const p = document.createElement('p');
-  p.style.cssText = 'color: #888; font-size: 0.875rem; text-align: center; max-width: 300px;';
-  p.textContent = 'Your ban has been lifted. Click below to continue using Konvo.';
-
-  const btn = document.createElement('button');
-  btn.style.cssText = `
-    margin-top: 1.5rem;
-    padding: 0.75rem 2rem;
-    background-color: #22c55e;
-    color: #000;
-    border: none;
-    border-radius: 8px;
-    font-weight: bold;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: transform 0.2s, background-color 0.2s;
-  `;
-  btn.textContent = 'CONTINUE';
-  btn.onmouseover = () => btn.style.backgroundColor = '#16a34a';
-  btn.onmouseout = () => btn.style.backgroundColor = '#22c55e';
-  btn.onclick = () => window.location.reload();
-
-  overlay.appendChild(h1);
-  overlay.appendChild(p);
-  overlay.appendChild(btn);
-  document.body.appendChild(overlay);
-}
-
-function showBannedScreen() {
-  const appContainer = document.getElementById('app') || document.body;
-
-  Array.from(appContainer.children).forEach(child => {
-    if (child.id !== 'banOverlayScreen') {
-      child.style.display = 'none';
-    }
-  });
-
-  const existingOverlay = document.getElementById('banOverlayScreen');
-  if (existingOverlay) existingOverlay.remove();
-
-  const overlay = document.createElement('div');
-  overlay.id = 'banOverlayScreen';
-  overlay.className = 'banned-overlay';
-  overlay.style.cssText = `
-    position: fixed;
-    inset: 0;
-    background-color: #0a0a0a;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 99999;
-    gap: 1rem;
-  `;
-
-  const h1 = document.createElement('h1');
-  h1.style.cssText = 'font-size: 1.875rem; color: #ef4444; font-weight: bold;';
-  h1.textContent = '🚫 ACCESS DENIED';
-
-  const p = document.createElement('p');
-  p.style.cssText = 'color: #888; font-size: 0.875rem;';
-  p.textContent = 'You have been banned from Konvo.';
-
-  const p2 = document.createElement('p');
-  p2.style.cssText = 'color: #555; font-size: 0.75rem; margin-top: 1rem;';
-  p2.textContent = 'If you believe this is a mistake, please wait for admin review.';
-
-  overlay.appendChild(h1);
-  overlay.appendChild(p);
-  overlay.appendChild(p2);
-  document.body.appendChild(overlay);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2109,7 +2018,7 @@ function updateScrollButton() {
     scrollToBottomBtn.classList.remove("hidden");
     scrollToBottomBtn.style.display = "flex";
 
-        if (state.unreadMessages > 0) {
+    if (state.unreadMessages > 0) {
       newMsgCount.classList.remove("hidden");
       setTextSafely(newMsgCount, 
         state.unreadMessages > 99 ? "99+" : String(state.unreadMessages)
@@ -2172,8 +2081,6 @@ async function loadPendingProfiles() {
         state.userProfiles[docSnap.id] = docSnap.data();
       });
     } catch (error) {
-      console.error("Error loading user profiles:", error);
-
       for (const userId of batch) {
         try {
           const docRef = doc(state.db, "users", userId);
@@ -2182,7 +2089,7 @@ async function loadPendingProfiles() {
             state.userProfiles[docSnap.id] = docSnap.data();
           }
         } catch (e) {
-          console.warn(`Failed to load profile for ${userId}:`, e);
+          // Failed to load profile
         }
       }
     }
@@ -2216,6 +2123,10 @@ function updateDisplayedUsernames() {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// USER PROFILE MANAGEMENT (CONTINUED)
+// ═══════════════════════════════════════════════════════════════════
+
 function listenForUserProfiles() {
   if (typeof unsubscribers.userProfiles === 'function') {
     unsubscribers.userProfiles();
@@ -2248,11 +2159,11 @@ function listenForUserProfiles() {
           updateDisplayedUsernames();
         },
         (error) => {
-          console.error("User profiles listener error:", error);
+          // User profiles listener error
         }
       );
     } catch (e) {
-      console.error("Error setting up profile listener:", e);
+      // Error setting up profile listener
     }
   };
 
@@ -2290,7 +2201,6 @@ async function loadUserProfile() {
         : state.currentUsername;
     }
   } catch (error) {
-    console.error("Load profile error:", error);
     throw error;
   }
 }
@@ -2348,8 +2258,6 @@ async function handleProfileSave() {
   }
 
   try {
-    console.log('Checking if username is available:', inputVal);
-
     const q = query(
       collection(state.db, "users"), 
       where("username", "==", inputVal)
@@ -2362,7 +2270,6 @@ async function handleProfileSave() {
     );
 
     if (querySnapshot === null) {
-      console.error('Username check timed out');
       showToast("Request timed out. Please try again.", "error");
       resetButtonState();
       return;
@@ -2376,13 +2283,10 @@ async function handleProfileSave() {
     });
 
     if (isTaken) {
-      console.log('Username is taken');
       showToast("Username is already taken!", "error");
       resetButtonState();
       return;
     }
-
-    console.log('Username available, saving profile...');
 
     if (modalSaveButton) {
       modalSaveButton.textContent = "SAVING...";
@@ -2390,16 +2294,28 @@ async function handleProfileSave() {
 
     const newProfilePhotoURL = `https://ui-avatars.com/api/?name=${encodeURIComponent(inputVal)}&background=random&size=128`;
 
-    await withTimeout(
-      setDoc(doc(state.db, "users", state.currentUserId), {
+    // Check if user document exists
+    const userDocRef = doc(state.db, "users", state.currentUserId);
+    const existingDoc = await getDoc(userDocRef);
+
+    if (existingDoc.exists()) {
+      // Update existing profile
+      await setDoc(userDocRef, {
         username: inputVal,
         profilePhotoURL: newProfilePhotoURL,
-      }, { merge: true }),
-      10000,
-      null
-    );
-
-    console.log('Profile saved successfully');
+        lastMessageAt: serverTimestamp(),
+      }, { merge: true });
+    } else {
+      // Create new profile with trust system fields
+      await setDoc(userDocRef, {
+        username: inputVal,
+        profilePhotoURL: newProfilePhotoURL,
+        trustLevel: 0,
+        messageCount: 0,
+        createdAt: serverTimestamp(),
+        lastMessageAt: serverTimestamp(),
+      });
+    }
 
     state.currentUsername = inputVal;
     state.currentProfilePhotoURL = newProfilePhotoURL;
@@ -2415,8 +2331,6 @@ async function handleProfileSave() {
     resetButtonState();
 
   } catch (error) {
-    console.error("Error saving profile:", error);
-
     if (error.code === 'permission-denied') {
       showToast("Permission denied. You may be banned.", "error");
     } else if (error.code === 'unavailable') {
@@ -2506,7 +2420,6 @@ async function saveEdit() {
 
     closeEditModal();
   } catch (e) {
-    console.error('Edit error:', e);
     showToast("Error: You can only edit your own messages.", "error");
   } finally {
     editModalSaveButton.textContent = "SAVE";
@@ -2541,7 +2454,7 @@ function showConfirmModal(text, isMine, docId) {
           hiddenFor: arrayUnion(state.currentUserId) 
         });
       } catch (e) {
-        console.error('Hide error:', e);
+        // Hide error
       }
     };
 
@@ -2554,7 +2467,6 @@ function showConfirmModal(text, isMine, docId) {
       try {
         await deleteDoc(doc(state.db, state.currentPage, docId));
       } catch (e) {
-        console.error('Delete error:', e);
         showToast("Permission denied.", "error");
       }
     };
@@ -2573,7 +2485,7 @@ function showConfirmModal(text, isMine, docId) {
           hiddenFor: arrayUnion(state.currentUserId) 
         });
       } catch (e) {
-        console.error("Hide failed:", e);
+        // Hide failed
       }
     };
 
@@ -2621,11 +2533,7 @@ async function toggleReaction(docId, collectionName, reactionType, hasReacted) {
         [`reactions.${reactionType}`]: arrayUnion(state.currentUserId)
       });
     }
-
-    console.log('Reaction synced:', reactionType, hasReacted ? 'removed' : 'added');
   } catch (error) {
-    console.error("Reaction error:", error);
-
     if (bubble) {
       updateReactionUI(bubble, reactionType, hasReacted, collectionName);
     }
@@ -2714,7 +2622,6 @@ function showDropdownMenu(event, data) {
   event.stopPropagation();
 
   if (!contextMenu) {
-    console.warn('Context menu element not found');
     return;
   }
 
@@ -2765,7 +2672,7 @@ function showDropdownMenu(event, data) {
               : "text-red-500 hover:text-red-400 font-bold border-t border-[#333] mt-1 pt-1";
           }
         } catch (e) {
-          console.warn("Could not check ban status for menu:", e);
+          // Could not check ban status
         }
       })();
     }
@@ -2912,7 +2819,6 @@ async function handleMultiDelete() {
       try {
         await batch.commit();
       } catch (e) {
-        console.error('Batch hide error:', e);
         showToast("Failed to hide messages.", "error");
       }
 
@@ -2938,7 +2844,6 @@ async function handleMultiDelete() {
         try {
           await batch.commit();
         } catch (e) {
-          console.error('Batch delete error:', e);
           showToast("Failed to delete messages.", "error");
         }
 
@@ -3045,8 +2950,6 @@ function safeRenderFeed(docs, type, snapshot, isRerender, isFirstSnapshot = fals
   try {
     renderFeed(docs, type, snapshot, isRerender, isFirstSnapshot);
   } catch (error) {
-    console.error('Render error:', error);
-
     if (feedContainer) {
       feedContainer.innerHTML = '';
 
@@ -3095,7 +2998,6 @@ function listenForConfessions(isRerender = false) {
       isFirstSnapshot = false;
     },
     (error) => {
-      console.error('Confessions error:', error);
       if (feedContainer) {
         feedContainer.innerHTML = '';
         const errorDiv = document.createElement("div");
@@ -3137,7 +3039,6 @@ function listenForChat(isRerender = false) {
       isFirstSnapshot = false;
     },
     (error) => {
-      console.error('Chat error:', error);
       if (feedContainer) {
         feedContainer.innerHTML = '';
         const errorDiv = document.createElement("div");
@@ -3190,7 +3091,6 @@ function listenForTyping() {
       }
     },
     (error) => {
-      console.warn("Typing listener error:", error);
       if (typingIndicator) {
         typingIndicator.innerHTML = "&nbsp;";
       }
@@ -3219,7 +3119,7 @@ const updateTypingStatus = debounce(async (isTyping) => {
       }, TYPING_TIMEOUT);
     }
   } catch (e) {
-    // Silently fail typing status updates
+    // Typing status update failed
   }
 }, 300);
 
@@ -3333,13 +3233,13 @@ function renderFeed(docs, type, snapshot, isRerender, isFirstSnapshot = false) {
     bubble.dataset.timestamp = data.timestamp ? String(data.timestamp.toMillis()) : String(Date.now());
 
     if (!isMine) {
-  bubble.style.borderLeft = `3px solid ${userColor}`;
-  bubble.style.background = `linear-gradient(90deg, ${userColor}10, transparent)`;
-} else {
-  // Sent messages - mirror the received bubble styling
-  bubble.style.borderRight = `3px solid ${userColor}`;
-  bubble.style.background = `linear-gradient(270deg, ${userColor}10, transparent)`;
-}
+      bubble.style.borderLeft = `3px solid ${userColor}`;
+      bubble.style.background = `linear-gradient(90deg, ${userColor}10, transparent)`;
+    } else {
+      bubble.style.borderRight = `3px solid ${userColor}`;
+      bubble.style.background = `linear-gradient(270deg, ${userColor}10, transparent)`;
+    }
+
     if (state.isSelectionMode && state.selectedMessages.has(docInstance.id)) {
       bubble.classList.add("selected-message");
     }
@@ -3645,9 +3545,14 @@ async function postMessage(collectionRef, input) {
     return;
   }
 
+  // Check spam status
   const spamCheck = checkSpamStatus();
 
   if (!spamCheck.allowed) {
+    if (spamCheck.reason === 'too_fast') {
+      showToast(spamCheck.message, "error");
+      return;
+    }
     if (spamCheck.shouldBan) {
       await autoBanForSpam();
       return;
@@ -3662,7 +3567,6 @@ async function postMessage(collectionRef, input) {
 
   if (!validation.valid) {
     showToast(validation.error, "error");
-    // Keep focus on input even on validation error
     input.focus({ preventScroll: true });
     return;
   }
@@ -3675,7 +3579,6 @@ async function postMessage(collectionRef, input) {
     document.getElementById('chatButton') : 
     document.getElementById('confessionButton');
 
-  // Store reference to input for refocusing later
   const inputToRefocus = input;
 
   const resetUI = () => {
@@ -3689,8 +3592,6 @@ async function postMessage(collectionRef, input) {
     }
   };
 
-  // Don't disable input - just disable the button to prevent double-submit
-  // This helps keep the keyboard open
   if (submitBtn) {
     submitBtn.disabled = true;
     submitBtn.classList.add('loading');
@@ -3698,8 +3599,10 @@ async function postMessage(collectionRef, input) {
   }
 
   try {
-    console.log('Posting message...');
+    const batch = writeBatch(state.db);
 
+    // Create message document
+    const messageRef = doc(collectionRef);
     const messageData = {
       text: text,
       timestamp: serverTimestamp(),
@@ -3714,21 +3617,19 @@ async function postMessage(collectionRef, input) {
       };
     }
 
-    const addResult = await withTimeout(
-      addDoc(collectionRef, messageData),
-      15000,
-      null
-    );
+    batch.set(messageRef, messageData);
 
-    if (addResult === null) {
-      throw new Error('Message send timed out');
-    }
+    // Update user's lastMessageAt and messageCount
+    const userRef = doc(state.db, "users", state.currentUserId);
+    batch.update(userRef, {
+      lastMessageAt: serverTimestamp(),
+      messageCount: increment(1)
+    });
 
-    console.log('Message posted successfully:', addResult.id);
+    await withTimeout(batch.commit(), 15000, null);
 
     recordMessage();
 
-    // Clear input value
     if (input) {
       input.value = "";
     }
@@ -3742,24 +3643,17 @@ async function postMessage(collectionRef, input) {
       updateCharacterCounter(input, counter);
     }
 
-    console.log('Message flow completed');
-
     resetUI();
     
-    // CRITICAL: Refocus input to prevent keyboard from closing on mobile
-    // Using requestAnimationFrame ensures this happens after all DOM updates
     requestAnimationFrame(() => {
       if (inputToRefocus) {
-        // preventScroll: true prevents the page from jumping
         inputToRefocus.focus({ preventScroll: true });
       }
     });
 
   } catch (error) {
-    console.error('Post error:', error);
-
     if (error.code === 'permission-denied') {
-      showToast("Permission denied. Please wait a moment and try again.", "error");
+      showToast("Permission denied. You may need to wait before sending again.", "error");
     } else if (error.message === 'Message send timed out') {
       showToast("Message timed out. Please check your connection.", "error");
     } else if (error.code === 'unavailable') {
@@ -3770,7 +3664,6 @@ async function postMessage(collectionRef, input) {
 
     resetUI();
     
-    // Refocus even on error
     requestAnimationFrame(() => {
       if (inputToRefocus) {
         inputToRefocus.focus({ preventScroll: true });
@@ -3818,8 +3711,7 @@ function cancelReplyMode() {
 // EVENT LISTENERS
 // ═══════════════════════════════════════════════════════════════════
 
-// Prevent keyboard flickering - desktop only fix
-// Mobile will work naturally, and we refocus after send in postMessage()
+// Prevent keyboard flickering on desktop
 if (window.matchMedia('(hover: hover)').matches) {
   document.getElementById('chatButton')?.addEventListener('mousedown', (e) => {
     e.preventDefault();
@@ -4012,7 +3904,6 @@ window.addEventListener('unload', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 initFirebase().catch(err => {
-  console.error("Failed to initialize app:", err);
   setTextSafely(loading, "Error: Failed to initialize. Please refresh the page.");
   hideBanCheckOverlay();
 });
